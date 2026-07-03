@@ -1,0 +1,43 @@
+# Secrets and local runtime configuration
+.env
+.env.*
+!.env.example
+*.secret
+
+# Python/local tooling
+__pycache__/
+.venv/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build and installer outputs
+build/
+dist/
+installer-output/
+*.spec.bak
+
+# Local development runtime data
+dev-data/
+dev-runtime/
+logs/
+state/
+chrome-profile/
+chrome-login-profile/
+
+# Generated business/export files
+*.xlsx
+*.xls
+*.csv
+*.tsv
+*.docx
+~$*
+*.tmp
+*.log
+
+# Archives and local packages
+*.zip
+*.7z
+*.rar
+*.exe
