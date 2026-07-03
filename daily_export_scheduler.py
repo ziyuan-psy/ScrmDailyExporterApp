@@ -19,6 +19,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -77,7 +78,7 @@ class ExportTask:
 
 EXPORT_TASKS = [
     ExportTask(SUPER_GROUP_TASK_ID, "超级群发未送达", "lookback"),
-    ExportTask(CHAT_ANALYSIS_TASK_ID, "客户群分析-按群聊", "yesterday"),
+    ExportTask(CHAT_ANALYSIS_TASK_ID, "客户群分析-按群聊", "lookback"),
     ExportTask(REACH_SUMMARY_TASK_ID, "统计触达客户", "lookback"),
     ExportTask(CUSTOMER_GROUP_TASK_ID, "群发客户群导出", "lookback"),
 ]
@@ -236,6 +237,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--today", help="Override today's date for tests, YYYY-MM-DD.")
     parser.add_argument("--config-dir", help="Runtime config directory. Defaults to user app data.")
     parser.add_argument("--data-dir", help="Export output directory. Defaults to the user's Documents folder.")
+    parser.add_argument("--start-date", help="Start catch-up from this date, YYYY-MM-DD.")
     parser.add_argument("--plan-only", action="store_true", help="Print pending dates without exporting or writing state.")
     parser.add_argument("--login-only", action="store_true", help="Open Chrome, wait for QR login, update .env, then exit.")
     return parser.parse_args(argv)
@@ -272,6 +274,16 @@ def parse_today(value: Optional[str]) -> date:
     if value:
         return datetime.strptime(value, "%Y-%m-%d").date()
     return date.today()
+
+
+def parse_start_date(value: Optional[str], today: date) -> Optional[date]:
+    if not value:
+        return None
+    parsed = datetime.strptime(value, "%Y-%m-%d").date()
+    yesterday = today - timedelta(days=1)
+    if parsed > yesterday:
+        raise ValueError(f"--start-date cannot be later than yesterday ({yesterday:%Y-%m-%d}).")
+    return parsed
 
 
 def now_text() -> str:
@@ -530,13 +542,8 @@ def initialize_customer_group_state_from_existing_files(
 
 
 def ensure_task_start_dates(state: Dict[str, Any], today: date) -> bool:
-    changed = False
-    starts = state.setdefault("task_start_dates", {})
-    yesterday = today - timedelta(days=1)
-    if CHAT_ANALYSIS_TASK_ID not in starts and yesterday >= date(2000, 1, 1):
-        starts[CHAT_ANALYSIS_TASK_ID] = yesterday.isoformat()
-        changed = True
-    return changed
+    state.setdefault("task_start_dates", {})
+    return False
 
 
 def is_task_success(state: Dict[str, Any], target_date: date, task_id: str) -> bool:
@@ -558,14 +565,6 @@ def first_pending_date_for_task(
     successes = task_successful_dates(state, task.task_id)
     if successes:
         return successes[-1] + timedelta(days=1)
-    if task.initial_mode == "yesterday":
-        start_value = (state.get("task_start_dates") or {}).get(task.task_id)
-        if start_value:
-            try:
-                return datetime.strptime(start_value, "%Y-%m-%d").date()
-            except ValueError:
-                pass
-        return yesterday
     return yesterday - timedelta(days=lookback_days - 1)
 
 
@@ -573,6 +572,7 @@ def pending_task_runs(
     state: Dict[str, Any],
     today: date,
     lookback_days: int,
+    start_date: Optional[date] = None,
 ) -> List[Tuple[date, ExportTask]]:
     yesterday = today - timedelta(days=1)
     if yesterday < date(2000, 1, 1):
@@ -580,7 +580,7 @@ def pending_task_runs(
 
     pending: List[Tuple[date, ExportTask]] = []
     for task in EXPORT_TASKS:
-        start = first_pending_date_for_task(state, task, today, lookback_days)
+        start = start_date or first_pending_date_for_task(state, task, today, lookback_days)
         if start > yesterday:
             continue
         for target_date in date_range(start, yesterday):
@@ -705,6 +705,32 @@ def run_task_export(task: ExportTask, target_date: date, config: SchedulerConfig
         run_customer_group_export(target_date, config)
         return
     raise RuntimeError(f"Unknown export task: {task.task_id}")
+
+
+def heartbeat_loop(stop_event: threading.Event, target_date: date, task: ExportTask) -> None:
+    while not stop_event.wait(30):
+        emit_event(
+            "RUN_HEARTBEAT",
+            date=target_date.isoformat(),
+            task_id=task.task_id,
+            label=task.label,
+            message="Task is still running.",
+        )
+
+
+def run_task_export_with_heartbeat(task: ExportTask, target_date: date, config: SchedulerConfig) -> None:
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=heartbeat_loop,
+        args=(stop_event, target_date, task),
+        daemon=True,
+    )
+    thread.start()
+    try:
+        run_task_export(task, target_date, config)
+    finally:
+        stop_event.set()
+        thread.join(timeout=1)
 
 
 def chrome_candidates() -> List[str]:
@@ -1045,7 +1071,12 @@ def refresh_login(config: SchedulerConfig) -> bool:
     return False
 
 
-def run_scheduler(config: SchedulerConfig, today: date, plan_only: bool) -> int:
+def run_scheduler(
+    config: SchedulerConfig,
+    today: date,
+    plan_only: bool,
+    start_date: Optional[date] = None,
+) -> int:
     state = load_state(config.state_path)
     migrated = migrate_state(state)
     initialized = initialize_state_from_existing_dirs(state, config.root, today)
@@ -1054,10 +1085,11 @@ def run_scheduler(config: SchedulerConfig, today: date, plan_only: bool) -> int:
         state, config.root, today
     )
     starts_initialized = ensure_task_start_dates(state, today)
-    pending = pending_task_runs(state, today, config.catchup_lookback_days)
+    pending = pending_task_runs(state, today, config.catchup_lookback_days, start_date)
     pending_text = ", ".join(f"{item_date.isoformat()}:{task.task_id}" for item_date, task in pending)
 
     print(f"Today: {today:%Y-%m-%d}")
+    print(f"Start date override: {start_date:%Y-%m-%d}" if start_date else "Start date override: (none)")
     print(f"State migrated: {migrated}")
     print(f"State initialized from existing folders: {initialized}")
     print(f"Reach summary initialized from existing docx: {reach_initialized}")
@@ -1102,7 +1134,7 @@ def run_scheduler(config: SchedulerConfig, today: date, plan_only: bool) -> int:
                     label=task.label,
                     output_dir=str(output_path_for(config, target_date)),
                 )
-                run_task_export(task, target_date, config)
+                run_task_export_with_heartbeat(task, target_date, config)
                 mark_task_success(state, target_date, task)
                 save_state(config.state_path, state)
                 emit_event(
@@ -1213,7 +1245,14 @@ def main(argv: List[str]) -> int:
         write_status(config, "FAILED", "Login refresh timed out.")
         return 1
 
-    return run_scheduler(config, parse_today(args.today), args.plan_only)
+    today = parse_today(args.today)
+    try:
+        start_date = parse_start_date(args.start_date, today)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    return run_scheduler(config, today, args.plan_only, start_date)
 
 
 if __name__ == "__main__":

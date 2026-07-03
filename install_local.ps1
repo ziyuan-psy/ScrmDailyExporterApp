@@ -1,10 +1,11 @@
+param(
+    [switch]$DesktopShortcut,
+    [switch]$TestMode
+)
+
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
-
-param(
-    [switch]$DesktopShortcut
-)
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Source = Join-Path $Root "dist\ScrmDailyExporter"
@@ -37,7 +38,11 @@ if ($DesktopShortcut) {
     $DesktopLink.Save()
 }
 
-& $CliExe install-task
+$InstallTaskArgs = @("install-task")
+if ($TestMode) {
+    $InstallTaskArgs += "--test-mode"
+}
+& $CliExe @InstallTaskArgs
 
 Write-Host ""
 Write-Host "Install complete: $AppDir"

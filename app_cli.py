@@ -11,7 +11,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 import daily_export_scheduler
 import runtime_paths
@@ -19,6 +19,8 @@ import runtime_paths
 
 TASK_TIME = "09:40"
 LOCK_STALE_SECONDS = 12 * 60 * 60
+TASK_LAUNCHER_NAME = "scheduled_auto_run.ps1"
+TEST_TASK_LAUNCHER_NAME = "scheduled_auto_run_test.ps1"
 
 
 class Tee(io.TextIOBase):
@@ -45,11 +47,18 @@ class RunLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             age = time.time() - self.path.stat().st_mtime
-            if age > LOCK_STALE_SECONDS:
+            lock_pid = read_lock_pid(self.path)
+            if lock_pid and not process_is_running(lock_pid):
+                self.path.unlink(missing_ok=True)
+            elif age > LOCK_STALE_SECONDS:
                 self.path.unlink(missing_ok=True)
         try:
             self.fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(self.fd, str(os.getpid()).encode("ascii", "ignore"))
+            payload = {
+                "pid": os.getpid(),
+                "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+            os.write(self.fd, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
         except FileExistsError as exc:
             raise RuntimeError("已有导出任务正在运行，请稍后再试。") from exc
         return self
@@ -61,12 +70,57 @@ class RunLock:
         self.path.unlink(missing_ok=True)
 
 
+def read_lock_pid(path: Path) -> Optional[int]:
+    try:
+        text = path.read_text(encoding="utf-8-sig", errors="replace").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    try:
+        value: Any = json.loads(text)
+        if isinstance(value, dict):
+            pid = value.get("pid")
+            return int(pid) if pid else None
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def process_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":
+        try:
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return ctypes.windll.kernel32.GetLastError() == 5
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SCRM daily exporter.")
     parser.add_argument("command", nargs="?", choices=["run", "run-now", "login", "status", "install-task", "uninstall-task"])
     parser.add_argument("--config-dir", help="Runtime config directory.")
     parser.add_argument("--data-dir", help="Export output directory.")
     parser.add_argument("--today", help="Override today's date for tests, YYYY-MM-DD.")
+    parser.add_argument("--start-date", help="Start catch-up from this date, YYYY-MM-DD.")
+    parser.add_argument("--test-mode", action="store_true", help="Use test task name and test runtime directories.")
     parser.add_argument("--plan-only", action="store_true", help="Print pending dates without exporting.")
     parser.add_argument("--run-now", action="store_true", help="Run pending exports now.")
     parser.add_argument("--login-only", action="store_true", help="Refresh login only.")
@@ -91,8 +145,10 @@ def configure_console() -> None:
 
 
 def resolve_runtime(args: argparse.Namespace) -> tuple[Path, Path]:
-    config_dir = runtime_paths.resolve_dir(args.config_dir, runtime_paths.default_config_dir())
-    data_dir = runtime_paths.resolve_dir(args.data_dir, runtime_paths.default_data_dir())
+    default_config = runtime_paths.default_test_config_dir() if args.test_mode else runtime_paths.default_config_dir()
+    default_data = runtime_paths.default_test_data_dir() if args.test_mode else runtime_paths.default_data_dir()
+    config_dir = runtime_paths.resolve_dir(args.config_dir, default_config)
+    data_dir = runtime_paths.resolve_dir(args.data_dir, default_data)
     runtime_paths.ensure_runtime_dirs(config_dir, data_dir)
     os.environ["SCRM_CONFIG_DIR"] = str(config_dir)
     os.environ["SCRM_DATA_DIR"] = str(data_dir)
@@ -136,6 +192,8 @@ def scheduler_args(args: argparse.Namespace, config_dir: Path, data_dir: Path, l
     result = ["--config-dir", str(config_dir), "--data-dir", str(data_dir)]
     if args.today:
         result.extend(["--today", args.today])
+    if args.start_date:
+        result.extend(["--start-date", args.start_date])
     if args.plan_only:
         result.append("--plan-only")
     if login_only:
@@ -178,12 +236,52 @@ def executable_for_task() -> Path:
     return Path(sys.executable).resolve()
 
 
-def task_command(config_dir: Path, data_dir: Path) -> str:
-    exe = executable_for_task()
+def ui_auto_run_command(config_dir: Path, data_dir: Path, test_mode: bool) -> List[str]:
     if getattr(sys, "frozen", False):
-        return f'"{exe}" run --config-dir "{config_dir}" --data-dir "{data_dir}"'
-    script = Path(__file__).resolve()
-    return f'"{exe}" "{script}" run --config-dir "{config_dir}" --data-dir "{data_dir}"'
+        command = [
+            str(Path(sys.executable).resolve().with_name("scrm-exporter-ui.exe")),
+            "--auto-run",
+        ]
+    else:
+        command = [
+            str(Path(sys.executable).resolve()),
+            str(Path(__file__).resolve().with_name("app_ui.py")),
+            "--auto-run",
+        ]
+    command.extend(["--config-dir", str(config_dir), "--data-dir", str(data_dir)])
+    if test_mode:
+        command.append("--test-mode")
+    return command
+
+
+def task_launcher_path(config_dir: Path, test_mode: bool) -> Path:
+    name = TEST_TASK_LAUNCHER_NAME if test_mode else TASK_LAUNCHER_NAME
+    return runtime_paths.state_dir(config_dir) / name
+
+
+def ps_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def write_task_launcher(config_dir: Path, data_dir: Path, test_mode: bool) -> Path:
+    path = task_launcher_path(config_dir, test_mode)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    command = ui_auto_run_command(config_dir, data_dir, test_mode)
+    exe = ps_quote(command[0])
+    arguments = ", ".join(ps_quote(arg) for arg in command[1:])
+    path.write_text(
+        "$ErrorActionPreference = 'Stop'\r\n"
+        f"Start-Process -FilePath {exe} -ArgumentList @({arguments})\r\n",
+        encoding="utf-8-sig",
+    )
+    return path
+
+
+def task_command(config_dir: Path, data_dir: Path, test_mode: bool) -> str:
+    launcher = write_task_launcher(config_dir, data_dir, test_mode)
+    return subprocess.list2cmdline(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(launcher)]
+    )
 
 
 def run_subprocess(command: Iterable[str]) -> int:
@@ -195,31 +293,35 @@ def run_subprocess(command: Iterable[str]) -> int:
     return completed.returncode
 
 
-def install_task(config_dir: Path, data_dir: Path) -> int:
-    command = task_command(config_dir, data_dir)
+def install_task(config_dir: Path, data_dir: Path, test_mode: bool) -> int:
+    task_name = runtime_paths.scheduled_task_name(test_mode)
+    command = task_command(config_dir, data_dir, test_mode)
     args = [
         "schtasks",
         "/Create",
         "/F",
+        "/IT",
         "/SC",
         "DAILY",
         "/ST",
         TASK_TIME,
         "/TN",
-        runtime_paths.TASK_NAME,
+        task_name,
         "/TR",
         command,
     ]
     code = run_subprocess(args)
     if code == 0:
-        print(f"计划任务已安装：{runtime_paths.TASK_NAME}，每天 {TASK_TIME}。")
+        print(f"计划任务已安装：{task_name}，每天 {TASK_TIME}。")
     return code
 
 
-def uninstall_task() -> int:
-    code = run_subprocess(["schtasks", "/Delete", "/F", "/TN", runtime_paths.TASK_NAME])
+def uninstall_task(config_dir: Path, test_mode: bool) -> int:
+    task_name = runtime_paths.scheduled_task_name(test_mode)
+    code = run_subprocess(["schtasks", "/Delete", "/F", "/TN", task_name])
+    task_launcher_path(config_dir, test_mode).unlink(missing_ok=True)
     if code == 0:
-        print(f"计划任务已卸载：{runtime_paths.TASK_NAME}。")
+        print(f"计划任务已卸载：{task_name}。")
     return code
 
 
@@ -249,9 +351,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if command == "status":
         return print_status(config_dir, data_dir)
     if command == "install-task":
-        return install_task(config_dir, data_dir)
+        return install_task(config_dir, data_dir, args.test_mode)
     if command == "uninstall-task":
-        return uninstall_task()
+        return uninstall_task(config_dir, args.test_mode)
     print(f"Unknown command: {command}", file=sys.stderr)
     return 2
 

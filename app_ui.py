@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
 import sys
 import tkinter as tk
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any, Dict, List, Optional
@@ -84,28 +86,44 @@ def exe_command() -> List[str]:
     return [sys.executable, str(Path(__file__).resolve().with_name("app_cli.py"))]
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="SCRM daily exporter UI.")
+    parser.add_argument("--auto-run", action="store_true", help="Run exports after the UI starts.")
+    parser.add_argument("--test-mode", action="store_true", help="Use test task name and test runtime directories.")
+    parser.add_argument("--config-dir", help="Runtime config directory.")
+    parser.add_argument("--data-dir", help="Export output directory.")
+    return parser.parse_args()
+
+
 def open_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     os.startfile(str(path))
 
 
 class ExporterUI(tk.Tk):
-    def __init__(self) -> None:
+    def __init__(self, args: argparse.Namespace) -> None:
         super().__init__()
-        self.title("企微社群任务自动导出")
+        self.test_mode = bool(args.test_mode)
+        title_suffix = " - 测试模式" if self.test_mode else ""
+        self.title(f"企微社群任务自动导出{title_suffix}")
         self.geometry("980x680")
         self.minsize(860, 580)
-        self.config_dir = runtime_paths.default_config_dir().resolve()
-        self.data_dir = runtime_paths.default_data_dir().resolve()
+        default_config = runtime_paths.default_test_config_dir() if self.test_mode else runtime_paths.default_config_dir()
+        default_data = runtime_paths.default_test_data_dir() if self.test_mode else runtime_paths.default_data_dir()
+        self.config_dir = runtime_paths.resolve_dir(args.config_dir, default_config)
+        self.data_dir = runtime_paths.resolve_dir(args.data_dir, default_data)
         runtime_paths.ensure_runtime_dirs(self.config_dir, self.data_dir)
         self.process: Optional[subprocess.Popen[str]] = None
         self.task_vars: Dict[str, Dict[str, tk.StringVar]] = {}
+        self.start_date_var = tk.StringVar(value=(date.today() - timedelta(days=1)).isoformat())
         self._build()
         self.after(300, self.refresh)
+        if args.auto_run:
+            self.after(800, self.run_now)
 
     def _build(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(3, weight=1)
+        self.rowconfigure(4, weight=1)
 
         header = ttk.Frame(self, padding=(14, 12, 14, 8))
         header.grid(row=0, column=0, sticky="ew")
@@ -143,8 +161,22 @@ class ExporterUI(tk.Tk):
         ):
             button.grid(row=0, column=index, padx=(0, 8), sticky="w")
 
+        start_frame = ttk.Frame(self, padding=(14, 0, 14, 10))
+        start_frame.grid(row=3, column=0, sticky="ew")
+        ttk.Label(start_frame, text="从指定日期开始：").grid(row=0, column=0, sticky="w")
+        self.start_date_entry = ttk.Entry(start_frame, textvariable=self.start_date_var, width=14)
+        self.start_date_entry.grid(row=0, column=1, padx=(6, 8), sticky="w")
+        self.start_date_button = ttk.Button(start_frame, text="从指定日期开始导出", command=self.run_from_start_date)
+        self.start_date_button.grid(row=0, column=2, sticky="w")
+        ttk.Label(start_frame, text="格式：YYYY-MM-DD，已成功任务会跳过", foreground="#4b5563").grid(
+            row=0,
+            column=3,
+            padx=(12, 0),
+            sticky="w",
+        )
+
         body = ttk.PanedWindow(self, orient=tk.VERTICAL)
-        body.grid(row=3, column=0, sticky="nsew", padx=14, pady=(0, 14))
+        body.grid(row=4, column=0, sticky="nsew", padx=14, pady=(0, 14))
 
         checklist = ttk.LabelFrame(body, text="4 个导出任务 checklist", padding=(10, 8))
         checklist.columnconfigure(1, weight=1)
@@ -169,8 +201,8 @@ class ExporterUI(tk.Tk):
         body.add(checklist, weight=1)
         body.add(log_frame, weight=4)
 
-    def command_args(self, command: str) -> List[str]:
-        return [
+    def command_args(self, command: str, extra_args: Optional[List[str]] = None) -> List[str]:
+        result = [
             *exe_command(),
             command,
             "--config-dir",
@@ -178,13 +210,18 @@ class ExporterUI(tk.Tk):
             "--data-dir",
             str(self.data_dir),
         ]
+        if self.test_mode:
+            result.append("--test-mode")
+        if extra_args:
+            result.extend(extra_args)
+        return result
 
-    def start_process(self, command: str) -> None:
+    def start_process(self, command: str, extra_args: Optional[List[str]] = None) -> None:
         if self.process and self.process.poll() is None:
             messagebox.showinfo("正在运行", "已有任务正在运行，请稍后。")
             return
         self.process = subprocess.Popen(
-            self.command_args(command),
+            self.command_args(command, extra_args),
             cwd=str(runtime_paths.app_dir()),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -194,6 +231,19 @@ class ExporterUI(tk.Tk):
 
     def run_now(self) -> None:
         self.start_process("run")
+
+    def run_from_start_date(self) -> None:
+        value = self.start_date_var.get().strip()
+        try:
+            start_date = datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            messagebox.showerror("日期格式错误", "请输入 YYYY-MM-DD 格式的日期。")
+            return
+        yesterday = date.today() - timedelta(days=1)
+        if start_date > yesterday:
+            messagebox.showerror("日期范围错误", f"开始日期不能晚于昨天（{yesterday:%Y-%m-%d}）。")
+            return
+        self.start_process("run", ["--start-date", value])
 
     def login(self) -> None:
         self.start_process("login")
@@ -241,6 +291,7 @@ class ExporterUI(tk.Tk):
         running = bool(self.process and self.process.poll() is None)
         button_state = "disabled" if running else "normal"
         self.run_button.configure(state=button_state)
+        self.start_date_button.configure(state=button_state)
         self.login_button.configure(state=button_state)
         self.after(1500, self.refresh)
 
@@ -267,11 +318,13 @@ class ExporterUI(tk.Tk):
                 result[task_id] = {"status": "失败", "detail": f"{date_value} {message}".strip()}
             elif event.get("event") == "WAITING_LOGIN":
                 result[task_id] = {"status": "等待扫码", "detail": date_value}
+            elif event.get("event") == "RUN_HEARTBEAT":
+                result[task_id] = {"status": "运行中", "detail": f"{date_value} 仍在处理".strip()}
         return result
 
 
 def main() -> int:
-    app = ExporterUI()
+    app = ExporterUI(parse_args())
     app.mainloop()
     return 0
 

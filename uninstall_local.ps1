@@ -1,3 +1,7 @@
+param(
+    [switch]$TestMode
+)
+
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -7,7 +11,11 @@ $AppDir = Join-Path $InstallRoot "app"
 $CliExe = Join-Path $AppDir "scrm-exporter.exe"
 
 if (Test-Path -LiteralPath $CliExe) {
-    & $CliExe uninstall-task
+    $UninstallTaskArgs = @("uninstall-task")
+    if ($TestMode) {
+        $UninstallTaskArgs += "--test-mode"
+    }
+    & $CliExe @UninstallTaskArgs
 }
 else {
     Write-Host "CLI not found; scheduled task removal skipped."
