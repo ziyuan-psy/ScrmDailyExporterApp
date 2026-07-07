@@ -211,7 +211,9 @@ class ScrmClient:
             DEFAULT_REQUEST_RETRY_BASE_DELAY_SECONDS,
         )
         self.browser_fetch_fallback = env_bool(env_file, "SCRM_BROWSER_FETCH_FALLBACK", True)
+        self.show_browser_fetch_notice = env_bool(env_file, "SCRM_SHOW_BROWSER_FETCH_NOTICE", False)
         self.chrome_debug_port = env_int(env_file, "CHROME_DEBUG_PORT", DEFAULT_CHROME_DEBUG_PORT)
+        self._browser_fetch_notice_paths: set[str] = set()
 
         cookie_map = parse_cookie(self.cookie)
         if not self.tenant_id:
@@ -270,6 +272,14 @@ class ScrmClient:
             flush=True,
         )
         time.sleep(delay)
+
+    def notice_browser_fetch(self, path: str) -> None:
+        if not self.show_browser_fetch_notice:
+            return
+        if path in self._browser_fetch_notice_paths:
+            return
+        self._browser_fetch_notice_paths.add(path)
+        print(f"  Direct SCRM request failed for {path}; using browser fetch fallback.", flush=True)
 
     def post_json_via_browser(
         self, path: str, payload: Dict[str, Any], referer: str
@@ -346,21 +356,21 @@ class ScrmClient:
                 message = str(data.get("msg") or data.get("message") or "unknown error")
                 error = ScrmError(f"SCRM error for {path}: code={code}, message={message}")
                 if self.browser_fetch_fallback and self.should_browser_fetch_scrm_error(code, message):
-                    print(f"  Direct SCRM request failed for {path}; trying browser fetch fallback.", flush=True)
+                    self.notice_browser_fetch(path)
                     return self.post_json_via_browser(path, payload, referer)
                 if self.should_retry_scrm_error(code, message) and attempt < self.request_max_attempts:
                     self.sleep_before_retry(path, attempt, error)
                     last_error = error
                     continue
                 if self.browser_fetch_fallback:
-                    print(f"  Direct SCRM request failed for {path}; trying browser fetch fallback.", flush=True)
+                    self.notice_browser_fetch(path)
                     return self.post_json_via_browser(path, payload, referer)
                 raise error
             return data
 
         if last_error:
             if self.browser_fetch_fallback:
-                print(f"  Direct SCRM request failed for {path}; trying browser fetch fallback.", flush=True)
+                self.notice_browser_fetch(path)
                 return self.post_json_via_browser(path, payload, referer)
             raise last_error
         raise ScrmError(f"SCRM request failed for {path}")

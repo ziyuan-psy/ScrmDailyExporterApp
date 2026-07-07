@@ -11,6 +11,7 @@ import argparse
 import re
 import shutil
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -27,6 +28,7 @@ import runtime_paths
 DEFAULT_OUTPUT_DOCX = "企微社群任务触达客户统计.docx"
 DEFAULT_EXCLUDE_KEYWORDS = ["测试", "海外", "境外"]
 DEFAULT_PAGE_SIZE = 100
+DEFAULT_DOCX_LOCK_WAIT_SECONDS = 300
 GROUP_SEND_LABEL = "群发客户"
 MOMENT_SEND_LABEL = "群发朋友圈"
 
@@ -412,7 +414,35 @@ def backup_docx(path: Path, backup_dir: Path) -> Optional[Path]:
     return backup_path
 
 
-def write_summary_docx(summary: ReachSummary, output_docx: Path, backup_dir: Path) -> bool:
+def save_docx_with_lock_wait(document: DocumentType, output_docx: Path, wait_seconds: int) -> None:
+    deadline = time.monotonic() + max(0, wait_seconds)
+    next_notice = 0.0
+    while True:
+        try:
+            document.save(output_docx)
+            return
+        except PermissionError as exc:
+            if time.monotonic() >= deadline:
+                raise ReachSummaryError(
+                    f"Output docx is open or locked: {output_docx}. Close it and rerun."
+                ) from exc
+            if time.monotonic() >= next_notice:
+                remaining = int(deadline - time.monotonic())
+                print(
+                    f"Output docx is open or locked: {output_docx}. "
+                    f"Close it to continue; retrying for {remaining}s.",
+                    flush=True,
+                )
+                next_notice = time.monotonic() + 30
+            time.sleep(5)
+
+
+def write_summary_docx(
+    summary: ReachSummary,
+    output_docx: Path,
+    backup_dir: Path,
+    lock_wait_seconds: int,
+) -> bool:
     document = Document(output_docx) if output_docx.exists() else Document()
     changed = update_document(document, summary)
     if not changed:
@@ -420,7 +450,7 @@ def write_summary_docx(summary: ReachSummary, output_docx: Path, backup_dir: Pat
         return False
     output_docx.parent.mkdir(parents=True, exist_ok=True)
     backup_path = backup_docx(output_docx, backup_dir)
-    document.save(output_docx)
+    save_docx_with_lock_wait(document, output_docx, lock_wait_seconds)
     print(f"Updated: {output_docx}")
     if backup_path:
         print(f"Backup: {backup_path}")
@@ -441,7 +471,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not output_docx.is_absolute():
         output_docx = runtime_paths.default_data_dir() / output_docx
     backup_dir = runtime_paths.state_dir(runtime_paths.default_config_dir()) / "backups"
-    write_summary_docx(summary, output_docx, backup_dir)
+    lock_wait_seconds = exporter.env_int(
+        env_file,
+        "REACH_DOCX_LOCK_WAIT_SECONDS",
+        DEFAULT_DOCX_LOCK_WAIT_SECONDS,
+    )
+    write_summary_docx(summary, output_docx, backup_dir, lock_wait_seconds)
     return 0
 
 

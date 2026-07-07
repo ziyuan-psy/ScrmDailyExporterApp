@@ -39,7 +39,7 @@ import runtime_paths
 LOGIN_URL = "https://scrm.cotticoffee.cc/login"
 SCRM_HOST = "scrm.cotticoffee.cc"
 DEFAULT_LOGIN_WAIT_MINUTES = 20
-DEFAULT_CATCHUP_LOOKBACK_DAYS = 14
+DEFAULT_CATCHUP_LOOKBACK_DAYS = 7
 DEFAULT_CHROME_DEBUG_PORT = 9222
 STATE_DIR_NAME = "state"
 STATE_FILE_NAME = "export_state.json"
@@ -994,6 +994,86 @@ def auth_updates_from_page(page: Dict[str, Any]) -> Dict[str, str]:
     return updates
 
 
+def validate_page_login(websocket_url: str) -> Tuple[bool, str]:
+    target_date = (date.today() - timedelta(days=1)).isoformat()
+    expression = f"""
+(async () => {{
+  const getCookie = (name) => {{
+    const prefix = name + '=';
+    for (const part of document.cookie.split(';')) {{
+      const item = part.trim();
+      if (item.startsWith(prefix)) return decodeURIComponent(item.slice(prefix.length));
+    }}
+    return '';
+  }};
+  const token = sessionStorage.getItem('current-token') || localStorage.getItem('current-token') || '';
+  const corpId = getCookie('corpId');
+  const context = JSON.stringify({{tenantId: corpId}});
+  const headers = {{
+    Accept: 'application/json, text/plain, */*',
+    'Content-Type': 'application/json',
+    'x-admin-header': '1',
+    'x-header-host': 'scrm.cotticoffee.cc',
+    'x-clientType-header': 'pc',
+    'x-requestMsgId-header': 'login-check-' + Date.now(),
+    'CONTEXT-JSON': context,
+    'CONTEXT_JSON': context
+  }};
+  if (token) headers.Authorization = token.startsWith('Bearer ') ? token : 'Bearer ' + token;
+  const payload = {{
+    currentIndex: 1,
+    pageSize: 1,
+    chatIdList: [],
+    dateType: 4,
+    startDate: {json.dumps(target_date)},
+    endDate: {json.dumps(target_date)},
+    sortField: '',
+    sortType: ''
+  }};
+  try {{
+    const res = await fetch('/bff/customer/private/pc/chatSummary/detail/chat', {{
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body: JSON.stringify(payload)
+    }});
+    const text = await res.text();
+    let data = null;
+    try {{ data = JSON.parse(text); }} catch (_error) {{}}
+    const code = data && data.code !== undefined && data.code !== null ? String(data.code) : '';
+    const message = data ? String(data.msg || data.message || '') : text.slice(0, 120);
+    const success = data && (data.success === true || code === '00000' || code === '200');
+    return {{
+      ok: res.status < 400 && success,
+      status: res.status,
+      code,
+      message,
+      href: location.href
+    }};
+  }} catch (error) {{
+    return {{ok: false, status: 0, code: '', message: String(error), href: location.href}};
+  }}
+}})()
+"""
+    with CdpClient(websocket_url) as client:
+        result = client.call(
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True, "awaitPromise": True},
+            timeout=15,
+        )
+    value = ((result.get("result") or {}).get("value")) or {}
+    if not isinstance(value, dict):
+        return False, "login check did not return a result"
+    if value.get("ok") is True:
+        return True, "ok"
+    status = value.get("status") or 0
+    code = value.get("code") or ""
+    message = str(value.get("message") or "").strip()
+    if len(message) > 80:
+        message = message[:80] + "..."
+    return False, f"status={status}, code={code}, message={message or 'not ready'}"
+
+
 def normalized_auth_value(key: str, value: str) -> str:
     value = str(value or "").strip()
     if key in {"SCRM_AUTHORIZATION", "SCRM_TOKEN"} and value.lower().startswith("bearer "):
@@ -1044,14 +1124,24 @@ def refresh_login(config: SchedulerConfig) -> bool:
             page = evaluate_page_auth(websocket_url)
             updates = auth_updates_from_page(page)
             if updates:
-                if not has_new_login_state(old_env, updates):
+                verified, reason = validate_page_login(websocket_url)
+                if not verified:
                     if time.monotonic() >= next_notice:
-                        print("Existing login state is unchanged; waiting for QR login refresh...", flush=True)
+                        if has_new_login_state(old_env, updates):
+                            print(
+                                f"Login state detected but not verified yet ({reason}); waiting for QR login...",
+                                flush=True,
+                            )
+                        else:
+                            print(
+                                f"Existing login state is not valid yet ({reason}); waiting for QR login refresh...",
+                                flush=True,
+                            )
                         next_notice = time.monotonic() + 30
                     time.sleep(5)
                     continue
                 update_dotenv(config.env_path, updates)
-                print("Login state refreshed and .env updated.", flush=True)
+                print("Login state verified and .env updated.", flush=True)
                 return True
         except (LoginRefreshError, OSError, URLError, HTTPError, json.JSONDecodeError) as exc:
             try:

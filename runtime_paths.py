@@ -7,9 +7,9 @@ from typing import Optional
 
 
 APP_NAME = "ScrmDailyExporter"
-TASK_NAME = "每日企微社群任务导出"
-TEST_TASK_NAME = "每日企微社群任务导出-App测试"
-DEFAULT_OUTPUT_FOLDER_NAME = "每日企微社群任务导出"
+TASK_NAME = "每日企微私域任务导出"
+TEST_TASK_NAME = "每日企微私域任务导出-App测试"
+DEFAULT_OUTPUT_FOLDER_NAME = "每日企微私域任务导出"
 TEST_OUTPUT_FOLDER_NAME = "ScrmDailyExporterTestData"
 
 

@@ -9,18 +9,18 @@
 - 日志目录：`%LOCALAPPDATA%\ScrmDailyExporter\logs`
 - 状态目录：`%LOCALAPPDATA%\ScrmDailyExporter\state`
 - 登录浏览器资料目录：`%LOCALAPPDATA%\ScrmDailyExporter\chrome-profile`
-- 导出结果目录：`%USERPROFILE%\Documents\每日企微社群任务导出`
+- 导出结果目录：`%USERPROFILE%\Documents\每日企微私域任务导出`
 
 ## 日常使用
 
 1. 打开“企微社群任务自动导出”。
 2. 首次使用点击“扫码登录/刷新登录态”，在打开的 Chrome 或 Edge 窗口扫码登录。
-3. 点击“立即运行一次”可手动补导昨天及之前未完成的任务。
+3. 点击“立即运行一次”可手动补导昨天及之前未完成的任务；首次运行默认补导最近 7 天。
 4. 控制台会显示 4 个任务的 checklist 和最近日志。
 
 ## 自动运行
 
-安装包会注册当前 Windows 用户的计划任务：`每日企微社群任务导出`。
+安装包会注册当前 Windows 用户的计划任务：`每日企微私域任务导出`。
 
 默认每天 09:40 打开 App UI 并自动执行一次导出。电脑关机、用户未登录或任务失败时，下次运行会自动补导未成功日期。
 
@@ -76,7 +76,7 @@ scrm-exporter-ui.exe --test-mode
 可以指定目录：
 
 ```powershell
-scrm-exporter.exe run --config-dir "%LOCALAPPDATA%\ScrmDailyExporter" --data-dir "%USERPROFILE%\Documents\每日企微社群任务导出"
+scrm-exporter.exe run --config-dir "%LOCALAPPDATA%\ScrmDailyExporter" --data-dir "%USERPROFILE%\Documents\每日企微私域任务导出"
 ```
 
 ## 测试模式
@@ -89,7 +89,7 @@ scrm-exporter.exe run --test-mode --plan-only
 scrm-exporter-ui.exe --test-mode
 ```
 
-测试模式使用计划任务名 `每日企微社群任务导出-App测试`，运行目录和导出目录也与正式模式分开。
+测试模式使用计划任务名 `每日企微私域任务导出-App测试`，运行目录和导出目录也与正式模式分开。
 
 ## 指定日期导出
 

@@ -123,6 +123,9 @@ class ChatGroupAnalysisClient:
         payload = {"taskId": task_id, "businessScenario": BUSINESS_SCENARIO}
         deadline = time.monotonic() + timeout
         last_percent = None
+        last_reported_percent = None
+        has_reported = False
+        next_heartbeat = 0.0
         while time.monotonic() < deadline:
             data = self.client.post_json(
                 "/bff/export/task/progress",
@@ -132,7 +135,19 @@ class ChatGroupAnalysisClient:
             progress = data.get("data") or {}
             last_percent = progress.get("downPercent")
             if progress.get("downResult"):
+                percent_text = str(last_percent or "").strip()
+                suffix = f" ({percent_text})" if percent_text else ""
+                print(f"  Export progress: completed{suffix}.", flush=True)
                 break
+            now = time.monotonic()
+            if not has_reported or last_percent != last_reported_percent or now >= next_heartbeat:
+                percent_text = str(last_percent or "").strip()
+                if percent_text and not percent_text.endswith("%"):
+                    percent_text = f"{percent_text}%"
+                print(f"  Export progress: {percent_text or 'waiting'}", flush=True)
+                last_reported_percent = last_percent
+                has_reported = True
+                next_heartbeat = now + 60
             time.sleep(interval)
         else:
             raise ChatAnalysisError(f"Export timed out; last percent={last_percent}")
