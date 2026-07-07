@@ -8,6 +8,7 @@
 - 运行配置目录：`%LOCALAPPDATA%\ScrmDailyExporter`
 - 日志目录：`%LOCALAPPDATA%\ScrmDailyExporter\logs`
 - 状态目录：`%LOCALAPPDATA%\ScrmDailyExporter\state`
+- App 设置文件：`%LOCALAPPDATA%\ScrmDailyExporter\app_settings.json`
 - 登录浏览器资料目录：`%LOCALAPPDATA%\ScrmDailyExporter\chrome-profile`
 - 导出结果目录：`%USERPROFILE%\Documents\每日企微私域任务导出`
 
@@ -15,8 +16,9 @@
 
 1. 打开“企微社群任务自动导出”。
 2. 首次使用点击“扫码登录/刷新登录态”，在打开的 Chrome 或 Edge 窗口扫码登录。
-3. 点击“立即运行一次”可手动补导昨天及之前未完成的任务；首次运行默认补导最近 7 天。
-4. 控制台会显示 4 个任务的 checklist 和最近日志。
+3. 如需更换保存位置，点击“选择导出目录”；保存后手动导出和计划任务都会使用新目录。
+4. “全局自动补导起始日期”默认是昨天；可填今天或未来日期来避免首次运行补导历史，清空后恢复最近 7 天补导。
+5. 点击“立即运行一次”可手动补导未完成任务；控制台会显示 4 个任务的 checklist 和最近日志。
 
 ## 自动运行
 
@@ -57,6 +59,15 @@ dist\ScrmDailyExporter
 ```text
 installer-output\ScrmDailyExporterSetup.exe
 ```
+
+调试 UI 或调度逻辑时，不需要每次重新打安装包。优先直接运行源码：
+
+```powershell
+.\.venv\Scripts\python.exe app_ui.py
+.\.venv\Scripts\python.exe app_cli.py run --test-mode --plan-only
+```
+
+需要验证 exe 行为时先运行 `build_release.ps1`，直接测试 `dist\ScrmDailyExporter` 里的程序；只有验证安装流程、计划任务注册或发给同事时，再运行 `build_installer.ps1`。
 
 ## 命令行
 

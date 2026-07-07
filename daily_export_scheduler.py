@@ -33,6 +33,7 @@ import export_chat_group_analysis_by_chat as chat_analysis_exporter
 import export_group_send_customer_group as customer_group_exporter
 import export_reach_customer_summary as reach_summary_exporter
 import export_super_group_undelivered as exporter
+import app_settings
 import runtime_paths
 
 
@@ -66,6 +67,7 @@ class SchedulerConfig:
     chrome_profile_dir: Path
     login_wait_minutes: int
     catchup_lookback_days: int
+    global_start_date: Optional[date]
     chrome_debug_port: int
 
 
@@ -246,6 +248,17 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 def load_config(data_dir: Path, config_dir: Path) -> SchedulerConfig:
     env_path = runtime_paths.env_path(config_dir)
     env_file = exporter.load_dotenv(env_path)
+    settings = app_settings.load_settings(config_dir)
+    global_start_date: Optional[date] = None
+    raw_global_start_date = settings.get("global_start_date")
+    if isinstance(raw_global_start_date, str) and raw_global_start_date.strip():
+        try:
+            global_start_date = date.fromisoformat(raw_global_start_date.strip())
+        except ValueError:
+            print(
+                f"Ignoring invalid global_start_date in app settings: {raw_global_start_date}",
+                file=sys.stderr,
+            )
     login_wait_minutes = int(
         exporter.env_value(env_file, "LOGIN_WAIT_MINUTES", str(DEFAULT_LOGIN_WAIT_MINUTES))
     )
@@ -266,6 +279,7 @@ def load_config(data_dir: Path, config_dir: Path) -> SchedulerConfig:
         chrome_profile_dir=runtime_paths.chrome_profile_dir(config_dir),
         login_wait_minutes=max(1, login_wait_minutes),
         catchup_lookback_days=max(1, catchup_lookback_days),
+        global_start_date=global_start_date,
         chrome_debug_port=chrome_debug_port,
     )
 
@@ -1175,11 +1189,17 @@ def run_scheduler(
         state, config.root, today
     )
     starts_initialized = ensure_task_start_dates(state, today)
-    pending = pending_task_runs(state, today, config.catchup_lookback_days, start_date)
+    effective_start_date = start_date or config.global_start_date
+    pending = pending_task_runs(state, today, config.catchup_lookback_days, effective_start_date)
     pending_text = ", ".join(f"{item_date.isoformat()}:{task.task_id}" for item_date, task in pending)
 
     print(f"Today: {today:%Y-%m-%d}")
     print(f"Start date override: {start_date:%Y-%m-%d}" if start_date else "Start date override: (none)")
+    print(
+        f"Global start date: {config.global_start_date:%Y-%m-%d}"
+        if config.global_start_date
+        else "Global start date: (none)"
+    )
     print(f"State migrated: {migrated}")
     print(f"State initialized from existing folders: {initialized}")
     print(f"Reach summary initialized from existing docx: {reach_initialized}")
@@ -1318,13 +1338,17 @@ def run_scheduler(
 
 def main(argv: List[str]) -> int:
     args = parse_args(argv)
+    today = parse_today(args.today)
     config_dir = runtime_paths.resolve_dir(args.config_dir, runtime_paths.default_config_dir())
-    data_dir = runtime_paths.resolve_dir(args.data_dir, runtime_paths.default_data_dir())
+    settings = app_settings.load_settings(config_dir)
+    saved_data_dir = app_settings.normalize_data_dir(settings.get("data_dir"))
+    data_dir = runtime_paths.resolve_dir(args.data_dir, saved_data_dir or runtime_paths.default_data_dir())
     runtime_paths.ensure_runtime_dirs(config_dir, data_dir)
     os.environ["SCRM_CONFIG_DIR"] = str(config_dir)
     os.environ["SCRM_DATA_DIR"] = str(data_dir)
     os.environ["SCRM_ENV_PATH"] = str(runtime_paths.env_path(config_dir))
     os.chdir(data_dir)
+    app_settings.ensure_settings(config_dir, data_dir, today)
     config = load_config(data_dir, config_dir)
 
     if args.login_only:
@@ -1335,7 +1359,6 @@ def main(argv: List[str]) -> int:
         write_status(config, "FAILED", "Login refresh timed out.")
         return 1
 
-    today = parse_today(args.today)
     try:
         start_date = parse_start_date(args.start_date, today)
     except ValueError as exc:

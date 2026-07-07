@@ -8,9 +8,11 @@ import sys
 import tkinter as tk
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
 
+import app_cli
+import app_settings
 import daily_export_scheduler
 import runtime_paths
 
@@ -111,11 +113,18 @@ class ExporterUI(tk.Tk):
         default_config = runtime_paths.default_test_config_dir() if self.test_mode else runtime_paths.default_config_dir()
         default_data = runtime_paths.default_test_data_dir() if self.test_mode else runtime_paths.default_data_dir()
         self.config_dir = runtime_paths.resolve_dir(args.config_dir, default_config)
-        self.data_dir = runtime_paths.resolve_dir(args.data_dir, default_data)
+        settings = app_settings.load_settings(self.config_dir)
+        saved_data_dir = app_settings.normalize_data_dir(settings.get("data_dir"))
+        self.data_dir = runtime_paths.resolve_dir(args.data_dir, saved_data_dir or default_data)
+        settings = app_settings.ensure_settings(self.config_dir, self.data_dir, date.today())
         runtime_paths.ensure_runtime_dirs(self.config_dir, self.data_dir)
         self.process: Optional[subprocess.Popen[str]] = None
         self.task_vars: Dict[str, Dict[str, tk.StringVar]] = {}
-        self.start_date_var = tk.StringVar(value=(date.today() - timedelta(days=1)).isoformat())
+        self.data_dir_var = tk.StringVar(value=f"导出目录：{self.data_dir}")
+        self.start_date_var = tk.StringVar(value="")
+        self.global_start_date_var = tk.StringVar(value=str(settings.get("global_start_date") or ""))
+        self._displayed_log_path: Optional[Path] = None
+        self._displayed_log_text: Optional[str] = None
         self._build()
         self.after(300, self.refresh)
         if args.auto_run:
@@ -138,7 +147,9 @@ class ExporterUI(tk.Tk):
         paths = ttk.Frame(self, padding=(14, 0, 14, 8))
         paths.grid(row=1, column=0, sticky="ew")
         paths.columnconfigure(1, weight=1)
-        ttk.Label(paths, text=f"导出目录：{self.data_dir}").grid(row=0, column=0, sticky="w")
+        ttk.Label(paths, textvariable=self.data_dir_var).grid(row=0, column=0, sticky="w")
+        self.choose_dir_button = ttk.Button(paths, text="选择导出目录", command=self.choose_data_dir)
+        self.choose_dir_button.grid(row=0, column=1, padx=(10, 0), sticky="w")
         ttk.Label(paths, text=f"运行目录：{self.config_dir}").grid(row=1, column=0, sticky="w")
 
         buttons = ttk.Frame(self, padding=(14, 0, 14, 10))
@@ -174,6 +185,16 @@ class ExporterUI(tk.Tk):
             padx=(12, 0),
             sticky="w",
         )
+        ttk.Label(start_frame, text="全局自动补导起始日期：").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.global_start_date_entry = ttk.Entry(start_frame, textvariable=self.global_start_date_var, width=14)
+        self.global_start_date_entry.grid(row=1, column=1, padx=(6, 8), sticky="w", pady=(8, 0))
+        self.save_global_start_button = ttk.Button(start_frame, text="保存全局起始日期", command=self.save_global_start_date)
+        self.save_global_start_button.grid(row=1, column=2, sticky="w", pady=(8, 0))
+        ttk.Label(
+            start_frame,
+            text="可填今天或未来日期；清空后恢复最近 7 天补导",
+            foreground="#4b5563",
+        ).grid(row=1, column=3, padx=(12, 0), sticky="w", pady=(8, 0))
 
         body = ttk.PanedWindow(self, orient=tk.VERTICAL)
         body.grid(row=4, column=0, sticky="nsew", padx=14, pady=(0, 14))
@@ -200,6 +221,85 @@ class ExporterUI(tk.Tk):
 
         body.add(checklist, weight=1)
         body.add(log_frame, weight=4)
+
+    def save_settings(self, **updates: Any) -> None:
+        settings = app_settings.load_settings(self.config_dir)
+        for key, value in updates.items():
+            if value is None:
+                settings.pop(key, None)
+            else:
+                settings[key] = value
+        app_settings.save_settings(self.config_dir, settings)
+
+    def sync_task_launcher(self) -> None:
+        app_cli.write_task_launcher(self.config_dir, self.data_dir, self.test_mode)
+
+    def choose_data_dir(self) -> None:
+        if self.process and self.process.poll() is None:
+            messagebox.showinfo("正在运行", "已有任务正在运行，请任务结束后再修改导出目录。")
+            return
+        selected = filedialog.askdirectory(title="选择导出目录", initialdir=str(self.data_dir))
+        if not selected:
+            return
+        new_dir = Path(selected).expanduser().resolve()
+        runtime_paths.ensure_runtime_dirs(self.config_dir, new_dir)
+        self.data_dir = new_dir
+        self.data_dir_var.set(f"导出目录：{self.data_dir}")
+        self.save_settings(data_dir=str(self.data_dir))
+        try:
+            self.sync_task_launcher()
+        except Exception as exc:
+            messagebox.showwarning(
+                "已保存目录",
+                f"导出目录已保存，但同步计划任务启动脚本失败：{exc}",
+            )
+            return
+        self.message_var.set("导出目录已保存，计划任务启动脚本已同步。")
+
+    def save_global_start_date(self) -> None:
+        value = self.global_start_date_var.get().strip()
+        if not value:
+            self.save_settings(global_start_date="")
+            self.message_var.set("全局起始日期已清空，将恢复最近 7 天补导。")
+            return
+        try:
+            normalized = app_settings.normalize_start_date(value)
+        except ValueError:
+            messagebox.showerror("日期格式错误", "请输入 YYYY-MM-DD 格式的日期，或清空恢复最近 7 天补导。")
+            return
+        self.global_start_date_var.set(normalized or "")
+        self.save_settings(global_start_date=normalized)
+        self.message_var.set(f"全局自动补导起始日期已保存：{normalized}")
+
+    def log_is_at_bottom(self) -> bool:
+        try:
+            _top, bottom = self.log_text.yview()
+        except tk.TclError:
+            return True
+        return bottom >= 0.999
+
+    def update_log_text(self, log_path: Optional[Path], text: str) -> None:
+        if self._displayed_log_path == log_path and self._displayed_log_text == text:
+            return
+        was_at_bottom = True if self._displayed_log_text is None else self.log_is_at_bottom()
+        try:
+            top, _bottom = self.log_text.yview()
+        except tk.TclError:
+            top = 0.0
+
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.insert("1.0", text)
+        self.log_text.configure(state="disabled")
+        self.update_idletasks()
+
+        if was_at_bottom:
+            self.log_text.see("end")
+        else:
+            self.log_text.yview_moveto(top)
+
+        self._displayed_log_path = log_path
+        self._displayed_log_text = text
 
     def command_args(self, command: str, extra_args: Optional[List[str]] = None) -> List[str]:
         result = [
@@ -283,16 +383,15 @@ class ExporterUI(tk.Tk):
             self.task_vars[task_id]["status"].set(values["status"])
             self.task_vars[task_id]["detail"].set(values["detail"])
 
-        self.log_text.configure(state="normal")
-        self.log_text.delete("1.0", "end")
-        self.log_text.insert("1.0", tail_text(log_path))
-        self.log_text.configure(state="disabled")
+        self.update_log_text(log_path, tail_text(log_path))
 
         running = bool(self.process and self.process.poll() is None)
         button_state = "disabled" if running else "normal"
         self.run_button.configure(state=button_state)
         self.start_date_button.configure(state=button_state)
         self.login_button.configure(state=button_state)
+        self.choose_dir_button.configure(state=button_state)
+        self.save_global_start_button.configure(state=button_state)
         self.after(1500, self.refresh)
 
     def build_checklist(self, events: List[Dict[str, Any]], state: Dict[str, Any]) -> Dict[str, Dict[str, str]]:

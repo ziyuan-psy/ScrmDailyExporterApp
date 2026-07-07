@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
+import app_settings
 import daily_export_scheduler
 import runtime_paths
 
@@ -148,7 +149,10 @@ def resolve_runtime(args: argparse.Namespace) -> tuple[Path, Path]:
     default_config = runtime_paths.default_test_config_dir() if args.test_mode else runtime_paths.default_config_dir()
     default_data = runtime_paths.default_test_data_dir() if args.test_mode else runtime_paths.default_data_dir()
     config_dir = runtime_paths.resolve_dir(args.config_dir, default_config)
-    data_dir = runtime_paths.resolve_dir(args.data_dir, default_data)
+    settings = app_settings.load_settings(config_dir)
+    saved_data_dir = app_settings.normalize_data_dir(settings.get("data_dir"))
+    data_dir = runtime_paths.resolve_dir(args.data_dir, saved_data_dir or default_data)
+    app_settings.ensure_settings(config_dir, data_dir, daily_export_scheduler.parse_today(args.today))
     runtime_paths.ensure_runtime_dirs(config_dir, data_dir)
     os.environ["SCRM_CONFIG_DIR"] = str(config_dir)
     os.environ["SCRM_DATA_DIR"] = str(data_dir)
