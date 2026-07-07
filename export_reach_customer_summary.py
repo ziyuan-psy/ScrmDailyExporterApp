@@ -29,6 +29,7 @@ DEFAULT_OUTPUT_DOCX = "企微社群任务触达客户统计.docx"
 DEFAULT_EXCLUDE_KEYWORDS = ["测试", "海外", "境外"]
 DEFAULT_PAGE_SIZE = 100
 DEFAULT_DOCX_LOCK_WAIT_SECONDS = 300
+DEFAULT_DOCX_BACKUP_ENABLED = False
 GROUP_SEND_LABEL = "群发客户"
 MOMENT_SEND_LABEL = "群发朋友圈"
 
@@ -442,6 +443,7 @@ def write_summary_docx(
     output_docx: Path,
     backup_dir: Path,
     lock_wait_seconds: int,
+    backup_enabled: bool,
 ) -> bool:
     document = Document(output_docx) if output_docx.exists() else Document()
     changed = update_document(document, summary)
@@ -449,7 +451,7 @@ def write_summary_docx(
         print(f"No docx change needed: {output_docx}")
         return False
     output_docx.parent.mkdir(parents=True, exist_ok=True)
-    backup_path = backup_docx(output_docx, backup_dir)
+    backup_path = backup_docx(output_docx, backup_dir) if backup_enabled else None
     save_docx_with_lock_wait(document, output_docx, lock_wait_seconds)
     print(f"Updated: {output_docx}")
     if backup_path:
@@ -476,7 +478,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "REACH_DOCX_LOCK_WAIT_SECONDS",
         DEFAULT_DOCX_LOCK_WAIT_SECONDS,
     )
-    write_summary_docx(summary, output_docx, backup_dir, lock_wait_seconds)
+    backup_enabled = exporter.env_bool(
+        env_file,
+        "REACH_DOCX_BACKUP_ENABLED",
+        DEFAULT_DOCX_BACKUP_ENABLED,
+    )
+    write_summary_docx(summary, output_docx, backup_dir, lock_wait_seconds, backup_enabled)
     return 0
 
 
