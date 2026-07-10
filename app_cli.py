@@ -297,6 +297,28 @@ def run_subprocess(command: Iterable[str]) -> int:
     return completed.returncode
 
 
+def allow_task_on_battery(task_name: str) -> int:
+    script = (
+        "$ErrorActionPreference = 'Stop'; "
+        "$taskName = $args[0]; "
+        "$task = Get-ScheduledTask -TaskName $taskName; "
+        "$task.Settings.DisallowStartIfOnBatteries = $false; "
+        "$task.Settings.StopIfGoingOnBatteries = $false; "
+        "Set-ScheduledTask -TaskName $taskName -Settings $task.Settings | Out-Null"
+    )
+    return run_subprocess(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+            task_name,
+        ]
+    )
+
+
 def install_task(config_dir: Path, data_dir: Path, test_mode: bool) -> int:
     task_name = runtime_paths.scheduled_task_name(test_mode)
     command = task_command(config_dir, data_dir, test_mode)
@@ -315,6 +337,8 @@ def install_task(config_dir: Path, data_dir: Path, test_mode: bool) -> int:
         command,
     ]
     code = run_subprocess(args)
+    if code == 0:
+        code = allow_task_on_battery(task_name)
     if code == 0:
         print(f"计划任务已安装：{task_name}，每天 {TASK_TIME}。")
     return code
