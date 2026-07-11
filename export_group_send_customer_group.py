@@ -23,6 +23,7 @@ import export_super_group_undelivered as exporter
 TASK_TYPE_CUSTOMER_GROUP = 2
 EXPORT_TYPE_CUSTOMER_GROUP_STATS = 3
 SEARCH_TYPE_UNDELIVERED = 0
+CUSTOMER_GROUP_TASK_ID = "group_send_customer_group_export"
 DEFAULT_OUTPUT_DIR_PREFIX = "社群任务"
 DEFAULT_EXCLUDE_KEYWORDS = ["测试", "海外", "境外"]
 
@@ -297,10 +298,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("No matched group-send customer-group tasks. Nothing to export.")
         return 0
 
+    state_path = exporter.default_export_state_path()
+    resume_state = None if args.dry_run else exporter.load_export_state(state_path)
+
     for index, task in enumerate(matched_tasks, start=1):
         print(f"[{index}/{len(matched_tasks)}] {task.name} | {task.send_time} | {task.complete_rate}%")
         if args.dry_run:
             continue
+
+        if resume_state is not None:
+            key = exporter.resume_item_key(target_date, task)
+            existing = exporter.successful_resume_item(
+                resume_state,
+                target_date,
+                CUSTOMER_GROUP_TASK_ID,
+                key,
+            )
+            if existing:
+                _item, output_file = existing
+                print(f"  Skipped existing export: {output_file}")
+                continue
 
         client.fetch_detail(task)
         undelivered_total = client.fetch_undelivered_total(task)
@@ -313,6 +330,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         download_url = client.wait_export_url(task, down_id, poll_interval, poll_timeout)
         saved_path = client.download_file(download_url, output_dir, task)
         print(f"  Saved: {saved_path}")
+        if resume_state is not None:
+            resume_state = exporter.mark_resume_item_success(
+                state_path,
+                target_date,
+                CUSTOMER_GROUP_TASK_ID,
+                output_dir,
+                task,
+                saved_path,
+            )
 
     return 0
 

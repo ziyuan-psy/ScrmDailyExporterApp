@@ -1245,6 +1245,7 @@ def run_scheduler(
                     output_dir=str(output_path_for(config, target_date)),
                 )
                 run_task_export_with_heartbeat(task, target_date, config)
+                state = load_state(config.state_path)
                 mark_task_success(state, target_date, task)
                 save_state(config.state_path, state)
                 emit_event(
@@ -1274,6 +1275,7 @@ def run_scheduler(
                         label=task.label,
                     )
                     if not refresh_login(config):
+                        state = load_state(config.state_path)
                         mark_task_failure(state, target_date, task, "Login timed out.")
                         save_state(config.state_path, state)
                         write_status(
@@ -1291,6 +1293,7 @@ def run_scheduler(
                         return 1
                     login_refreshed = True
                     continue
+                state = load_state(config.state_path)
                 mark_task_failure(state, target_date, task, str(exc))
                 save_state(config.state_path, state)
                 write_status(config, "FAILED", f"{target_date:%Y-%m-%d} [{task.task_id}]: {exc}")
@@ -1304,6 +1307,7 @@ def run_scheduler(
                 print(f"Export failed for {target_date:%Y-%m-%d} [{task.task_id}]: {exc}", file=sys.stderr)
                 return 1
             except Exception as exc:
+                state = load_state(config.state_path)
                 mark_task_failure(state, target_date, task, f"{type(exc).__name__}: {exc}")
                 save_state(config.state_path, state)
                 write_status(config, "FAILED", f"{target_date:%Y-%m-%d} [{task.task_id}]: {type(exc).__name__}: {exc}")
@@ -1318,6 +1322,7 @@ def run_scheduler(
                 return 1
 
             if attempts > 2:
+                state = load_state(config.state_path)
                 mark_task_failure(state, target_date, task, "Too many attempts.")
                 save_state(config.state_path, state)
                 write_status(config, "FAILED", f"Too many attempts for {target_date:%Y-%m-%d} [{task.task_id}].")

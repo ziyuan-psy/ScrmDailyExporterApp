@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urlparse, urlunparse
 from urllib.request import Request, urlopen
@@ -27,6 +27,8 @@ import runtime_paths
 
 
 BASE_URL = "https://scrm.cotticoffee.cc"
+EXPORT_STATE_FILE_NAME = "export_state.json"
+SUPER_GROUP_TASK_ID = "super_group_undelivered"
 DEFAULT_EXCLUDE_KEYWORDS = ["测试", "海外", "境外"]
 ILLEGAL_FILENAME_CHARS = r'<>:"/\|?*'
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
@@ -58,6 +60,107 @@ class Task:
     status: Any
     complete_rate: Any
     raw: Dict[str, Any]
+
+
+def default_export_state_path() -> Path:
+    return runtime_paths.state_dir(runtime_paths.default_config_dir()) / EXPORT_STATE_FILE_NAME
+
+
+def load_export_state(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {"schema_version": 2, "dates": {}, "task_start_dates": {}}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema_version": 2, "dates": {}, "task_start_dates": {}}
+    if not isinstance(state, dict):
+        return {"schema_version": 2, "dates": {}, "task_start_dates": {}}
+    state.setdefault("schema_version", 2)
+    state.setdefault("dates", {})
+    state.setdefault("task_start_dates", {})
+    return state
+
+
+def save_export_state(path: Path, state: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp_path.replace(path)
+
+
+def resume_item_key(target_date: date, task: Any) -> str:
+    return f"{target_date.isoformat()}|{task.template_id}|{task.send_time}"
+
+
+def resume_task_record(
+    state: Dict[str, Any],
+    target_date: date,
+    task_id: str,
+    output_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    dates = state.setdefault("dates", {})
+    if not isinstance(dates, dict):
+        dates = {}
+        state["dates"] = dates
+    iso_date = target_date.isoformat()
+    date_record = dates.get(iso_date)
+    if not isinstance(date_record, dict):
+        date_record = {}
+        dates[iso_date] = date_record
+    if output_dir is not None:
+        date_record.setdefault("output_dir", output_dir.name)
+    tasks = date_record.setdefault("tasks", {})
+    if not isinstance(tasks, dict):
+        tasks = {}
+        date_record["tasks"] = tasks
+    task_record = tasks.get(task_id)
+    if not isinstance(task_record, dict):
+        task_record = {}
+        tasks[task_id] = task_record
+    task_record.setdefault("items", {})
+    return task_record
+
+
+def successful_resume_item(
+    state: Dict[str, Any],
+    target_date: date,
+    task_id: str,
+    key: str,
+) -> Optional[Tuple[Dict[str, Any], Path]]:
+    task_record = resume_task_record(state, target_date, task_id)
+    item = (task_record.get("items") or {}).get(key)
+    if not isinstance(item, dict) or item.get("status") != "success":
+        return None
+    output_file = str(item.get("output_file") or "")
+    if not output_file:
+        return None
+    output_path = Path(output_file)
+    if not output_path.exists():
+        return None
+    return item, output_path
+
+
+def mark_resume_item_success(
+    state_path: Path,
+    target_date: date,
+    task_id: str,
+    output_dir: Path,
+    task: Any,
+    output_file: Path,
+) -> Dict[str, Any]:
+    state = load_export_state(state_path)
+    key = resume_item_key(target_date, task)
+    task_record = resume_task_record(state, target_date, task_id, output_dir)
+    task_record.setdefault("items", {})[key] = {
+        "status": "success",
+        "template_id": task.template_id,
+        "send_time": task.send_time,
+        "name": task.name,
+        "output_file": str(output_file.resolve()),
+        "completed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    save_export_state(state_path, state)
+    return state
 
 
 def load_dotenv(path: Path) -> Dict[str, str]:
@@ -597,10 +700,26 @@ def main(argv: List[str]) -> int:
     if not matched_tasks:
         return 0
 
+    state_path = default_export_state_path()
+    resume_state = None if args.dry_run else load_export_state(state_path)
+
     for index, task in enumerate(matched_tasks, start=1):
         print(f"[{index}/{len(matched_tasks)}] {task.name} | {task.send_time} | {task.complete_rate}%")
         if args.dry_run:
             continue
+
+        if resume_state is not None:
+            key = resume_item_key(target_date, task)
+            existing = successful_resume_item(
+                resume_state,
+                target_date,
+                SUPER_GROUP_TASK_ID,
+                key,
+            )
+            if existing:
+                _item, output_file = existing
+                print(f"  Skipped existing export: {output_file}")
+                continue
 
         client.fetch_detail(task)
         undelivered_total = client.fetch_undelivered_total(task)
@@ -613,6 +732,15 @@ def main(argv: List[str]) -> int:
         download_url = client.wait_export_url(task, down_id, poll_interval, poll_timeout)
         saved_path = client.download_file(download_url, output_dir, task)
         print(f"  Saved: {saved_path}")
+        if resume_state is not None:
+            resume_state = mark_resume_item_success(
+                state_path,
+                target_date,
+                SUPER_GROUP_TASK_ID,
+                output_dir,
+                task,
+                saved_path,
+            )
 
     return 0
 

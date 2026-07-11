@@ -299,12 +299,14 @@ def run_subprocess(command: Iterable[str]) -> int:
 
 def allow_task_on_battery(task_name: str) -> int:
     script = (
+        "& { "
+        "param([string]$taskName) "
         "$ErrorActionPreference = 'Stop'; "
-        "$taskName = $args[0]; "
         "$task = Get-ScheduledTask -TaskName $taskName; "
         "$task.Settings.DisallowStartIfOnBatteries = $false; "
         "$task.Settings.StopIfGoingOnBatteries = $false; "
-        "Set-ScheduledTask -TaskName $taskName -Settings $task.Settings | Out-Null"
+        "Set-ScheduledTask -TaskName $taskName -Settings $task.Settings | Out-Null "
+        "}"
     )
     return run_subprocess(
         [
