@@ -35,6 +35,7 @@ import export_reach_customer_summary as reach_summary_exporter
 import export_super_group_undelivered as exporter
 import app_settings
 import runtime_paths
+import state_file_io
 
 
 LOGIN_URL = "https://scrm.cotticoffee.cc/login"
@@ -346,10 +347,7 @@ def load_state(path: Path) -> Dict[str, Any]:
 
 
 def save_state(path: Path, state: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temp_path.replace(path)
+    state_file_io.save_json_atomic(path, state)
 
 
 def write_status(config: SchedulerConfig, status: str, message: str) -> None:

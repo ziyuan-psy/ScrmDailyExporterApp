@@ -24,6 +24,7 @@ from urllib.request import Request, urlopen
 
 import scrm_browser_fetch
 import runtime_paths
+import state_file_io
 
 
 BASE_URL = "https://scrm.cotticoffee.cc"
@@ -82,10 +83,7 @@ def load_export_state(path: Path) -> Dict[str, Any]:
 
 
 def save_export_state(path: Path, state: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temp_path.replace(path)
+    state_file_io.save_json_atomic(path, state)
 
 
 def resume_item_key(target_date: date, task: Any) -> str:
