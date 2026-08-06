@@ -3,7 +3,7 @@
 from PyInstaller.utils.hooks import collect_submodules
 
 
-hiddenimports = collect_submodules("docx")
+hiddenimports = collect_submodules("docx") + collect_submodules("openpyxl")
 common_datas = [(".env.example", "."), ("README_APP.md", ".")]
 
 cli = Analysis(

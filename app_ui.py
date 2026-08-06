@@ -20,8 +20,10 @@ import runtime_paths
 TASKS = [
     ("super_group_undelivered", "超级群发未送达"),
     ("chat_group_analysis_by_chat", "客户群分析-按群聊"),
-    ("reach_customer_summary", "统计触达客户"),
+    ("reach_customer_summary", "群发客户及朋友圈触达人数"),
     ("group_send_customer_group_export", "群发客户群导出"),
+    ("reach_excel_summary", "触达人数汇总"),
+    ("store_group_reach_summary", "门店分组触达人数"),
 ]
 
 STATUS_COLORS = {
@@ -199,13 +201,13 @@ class ExporterUI(tk.Tk):
         body = ttk.PanedWindow(self, orient=tk.VERTICAL)
         body.grid(row=4, column=0, sticky="nsew", padx=14, pady=(0, 14))
 
-        checklist = ttk.LabelFrame(body, text="4 个导出任务 checklist", padding=(10, 8))
+        checklist = ttk.LabelFrame(body, text="6 个导出任务 checklist", padding=(10, 8))
         checklist.columnconfigure(1, weight=1)
         for row, (task_id, label) in enumerate(TASKS):
             status_var = tk.StringVar(value="未开始")
             detail_var = tk.StringVar(value="")
             self.task_vars[task_id] = {"status": status_var, "detail": detail_var}
-            ttk.Label(checklist, text=label, width=24).grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Label(checklist, text=label, width=30).grid(row=row, column=0, sticky="w", pady=4)
             status_label = ttk.Label(checklist, textvariable=status_var, width=10)
             status_label.grid(row=row, column=1, sticky="w", pady=4)
             ttk.Label(checklist, textvariable=detail_var, foreground="#4b5563").grid(row=row, column=2, sticky="ew", pady=4)

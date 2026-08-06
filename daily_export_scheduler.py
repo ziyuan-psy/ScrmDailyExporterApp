@@ -31,6 +31,7 @@ from urllib.request import Request, urlopen
 
 import export_chat_group_analysis_by_chat as chat_analysis_exporter
 import export_group_send_customer_group as customer_group_exporter
+import export_reach_daily_excel as reach_excel_exporter
 import export_reach_customer_summary as reach_summary_exporter
 import export_super_group_undelivered as exporter
 import app_settings
@@ -51,6 +52,8 @@ SUPER_GROUP_TASK_ID = "super_group_undelivered"
 CHAT_ANALYSIS_TASK_ID = "chat_group_analysis_by_chat"
 REACH_SUMMARY_TASK_ID = "reach_customer_summary"
 CUSTOMER_GROUP_TASK_ID = "group_send_customer_group_export"
+REACH_EXCEL_SUMMARY_TASK_ID = "reach_excel_summary"
+STORE_GROUP_REACH_TASK_ID = "store_group_reach_summary"
 
 
 class LoginRefreshError(RuntimeError):
@@ -82,8 +85,10 @@ class ExportTask:
 EXPORT_TASKS = [
     ExportTask(SUPER_GROUP_TASK_ID, "超级群发未送达", "lookback"),
     ExportTask(CHAT_ANALYSIS_TASK_ID, "客户群分析-按群聊", "lookback"),
-    ExportTask(REACH_SUMMARY_TASK_ID, "统计触达客户", "lookback"),
+    ExportTask(REACH_SUMMARY_TASK_ID, "群发客户及朋友圈触达人数", "lookback"),
     ExportTask(CUSTOMER_GROUP_TASK_ID, "群发客户群导出", "lookback"),
+    ExportTask(REACH_EXCEL_SUMMARY_TASK_ID, "触达人数汇总", "lookback"),
+    ExportTask(STORE_GROUP_REACH_TASK_ID, "门店分组触达人数", "lookback"),
 ]
 
 
@@ -461,6 +466,10 @@ def migrate_state(state: Dict[str, Any]) -> bool:
                 "source": record.get("source") or "legacy_state",
             }
             changed = True
+        reach_task = tasks.get(REACH_SUMMARY_TASK_ID)
+        if isinstance(reach_task, dict) and reach_task.get("label") == "统计触达客户":
+            reach_task["label"] = "群发客户及朋友圈触达人数"
+            changed = True
 
     if state.get("schema_version") != 2:
         state["schema_version"] = 2
@@ -512,7 +521,7 @@ def initialize_reach_state_from_existing_docx(state: Dict[str, Any], root: Path)
                 "status": "success",
                 "completed_at": now_text(),
                 "output_docx": docx_path.name,
-                "label": "统计触达客户",
+                "label": "群发客户及朋友圈触达人数",
                 "source": "existing_docx",
             }
         )
@@ -544,6 +553,45 @@ def initialize_customer_group_state_from_existing_files(
                 "output_dir": child.name,
                 "label": "群发客户群导出",
                 "source": "existing_folder",
+            }
+        )
+        changed = True
+
+    if changed:
+        update_last_success(state)
+    return changed
+
+
+def initialize_reach_excel_state_from_existing_workbook(state: Dict[str, Any], root: Path) -> bool:
+    xlsx_path = root / reach_excel_exporter.DEFAULT_OUTPUT_NAME
+    if not xlsx_path.exists():
+        return False
+
+    changed = False
+    for target_date in reach_excel_exporter.reach_summary_dates(xlsx_path):
+        if is_task_success(state, target_date, REACH_EXCEL_SUMMARY_TASK_ID):
+            continue
+        task_record(state, target_date, REACH_EXCEL_SUMMARY_TASK_ID).update(
+            {
+                "status": "success",
+                "completed_at": now_text(),
+                "output_xlsx": xlsx_path.name,
+                "label": "触达人数汇总",
+                "source": "existing_xlsx",
+            }
+        )
+        changed = True
+
+    for target_date in reach_excel_exporter.store_group_dates(xlsx_path):
+        if is_task_success(state, target_date, STORE_GROUP_REACH_TASK_ID):
+            continue
+        task_record(state, target_date, STORE_GROUP_REACH_TASK_ID).update(
+            {
+                "status": "success",
+                "completed_at": now_text(),
+                "output_xlsx": xlsx_path.name,
+                "label": "门店分组触达人数",
+                "source": "existing_xlsx",
             }
         )
         changed = True
@@ -612,6 +660,8 @@ def mark_task_success(state: Dict[str, Any], target_date: date, task: ExportTask
     }
     if task.task_id == REACH_SUMMARY_TASK_ID:
         record["output_docx"] = reach_summary_exporter.DEFAULT_OUTPUT_DOCX
+    if task.task_id in {REACH_EXCEL_SUMMARY_TASK_ID, STORE_GROUP_REACH_TASK_ID}:
+        record["output_xlsx"] = reach_excel_exporter.DEFAULT_OUTPUT_NAME
     task_record(state, target_date, task.task_id).update(record)
     update_last_success(state)
 
@@ -627,6 +677,8 @@ def mark_task_failure(state: Dict[str, Any], target_date: date, task: ExportTask
     }
     if task.task_id == REACH_SUMMARY_TASK_ID:
         record["output_docx"] = reach_summary_exporter.DEFAULT_OUTPUT_DOCX
+    if task.task_id in {REACH_EXCEL_SUMMARY_TASK_ID, STORE_GROUP_REACH_TASK_ID}:
+        record["output_xlsx"] = reach_excel_exporter.DEFAULT_OUTPUT_NAME
     task_record(state, target_date, task.task_id).update(record)
 
 
@@ -674,7 +726,7 @@ def run_chat_analysis_export(target_date: date, config: SchedulerConfig) -> None
 
 def run_reach_summary_export(target_date: date, config: SchedulerConfig) -> None:
     print(
-        f"\n=== {target_date:%Y-%m-%d} | 统计触达客户 -> {reach_summary_exporter.DEFAULT_OUTPUT_DOCX} ===",
+        f"\n=== {target_date:%Y-%m-%d} | 群发客户及朋友圈触达人数 -> {reach_summary_exporter.DEFAULT_OUTPUT_DOCX} ===",
         flush=True,
     )
     reach_summary_exporter.main(
@@ -684,6 +736,38 @@ def run_reach_summary_export(target_date: date, config: SchedulerConfig) -> None
             "--output-docx",
             str(config.root / reach_summary_exporter.DEFAULT_OUTPUT_DOCX),
         ]
+    )
+
+
+def run_reach_excel_summary_export(target_date: date, config: SchedulerConfig) -> None:
+    output_xlsx = config.root / reach_excel_exporter.DEFAULT_OUTPUT_NAME
+    reach_docx = config.root / reach_summary_exporter.DEFAULT_OUTPUT_DOCX
+    print(
+        f"\n=== {target_date:%Y-%m-%d} | 触达人数汇总 -> {output_xlsx} ===",
+        flush=True,
+    )
+    reach_excel_exporter.update_reach_summary_sheet(
+        source_root=config.root,
+        output_xlsx=output_xlsx,
+        reach_docx=reach_docx,
+        target_dates=[target_date],
+        recent_days=config.catchup_lookback_days,
+        today=target_date + timedelta(days=1),
+    )
+
+
+def run_store_group_reach_export(target_date: date, config: SchedulerConfig) -> None:
+    output_xlsx = config.root / reach_excel_exporter.DEFAULT_OUTPUT_NAME
+    print(
+        f"\n=== {target_date:%Y-%m-%d} | 门店分组触达人数 -> {output_xlsx} ===",
+        flush=True,
+    )
+    reach_excel_exporter.update_store_group_sheet(
+        source_root=config.root,
+        output_xlsx=output_xlsx,
+        target_dates=[target_date],
+        recent_days=config.catchup_lookback_days,
+        today=target_date + timedelta(days=1),
     )
 
 
@@ -715,6 +799,12 @@ def run_task_export(task: ExportTask, target_date: date, config: SchedulerConfig
         return
     if task.task_id == CUSTOMER_GROUP_TASK_ID:
         run_customer_group_export(target_date, config)
+        return
+    if task.task_id == REACH_EXCEL_SUMMARY_TASK_ID:
+        run_reach_excel_summary_export(target_date, config)
+        return
+    if task.task_id == STORE_GROUP_REACH_TASK_ID:
+        run_store_group_reach_export(target_date, config)
         return
     raise RuntimeError(f"Unknown export task: {task.task_id}")
 
@@ -1186,6 +1276,7 @@ def run_scheduler(
     customer_group_initialized = initialize_customer_group_state_from_existing_files(
         state, config.root, today
     )
+    reach_excel_initialized = initialize_reach_excel_state_from_existing_workbook(state, config.root)
     starts_initialized = ensure_task_start_dates(state, today)
     effective_start_date = start_date or config.global_start_date
     pending = pending_task_runs(state, today, config.catchup_lookback_days, effective_start_date)
@@ -1202,6 +1293,7 @@ def run_scheduler(
     print(f"State initialized from existing folders: {initialized}")
     print(f"Reach summary initialized from existing docx: {reach_initialized}")
     print(f"Customer group initialized from existing files: {customer_group_initialized}")
+    print(f"Reach Excel initialized from existing workbook: {reach_excel_initialized}")
     print(f"Task start dates initialized: {starts_initialized}")
     print(f"Pending task runs: {pending_text or '(none)'}")
     emit_event("RUN_PENDING", pending=pending_text, today=today.isoformat())
@@ -1214,6 +1306,7 @@ def run_scheduler(
         or initialized
         or reach_initialized
         or customer_group_initialized
+        or reach_excel_initialized
         or starts_initialized
     ):
         save_state(config.state_path, state)
@@ -1259,6 +1352,7 @@ def run_scheduler(
                 chat_analysis_exporter.ChatAnalysisError,
                 customer_group_exporter.GroupSendCustomerGroupError,
                 reach_summary_exporter.ReachSummaryError,
+                reach_excel_exporter.ReachSummaryError,
             ) as exc:
                 if is_auth_error(exc) and not login_refreshed:
                     write_status(
