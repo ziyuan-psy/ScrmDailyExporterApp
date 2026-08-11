@@ -1,3 +1,129 @@
+# SCRM Daily Exporter
+
+This is an installable Windows tool for daily SCRM community-task exports. It does not require Codex, and coworkers do not need to install Python before using it.
+
+## Default Paths
+
+- App installation directory: `%LOCALAPPDATA%\ScrmDailyExporter\app`
+- Runtime configuration directory: `%LOCALAPPDATA%\ScrmDailyExporter`
+- Logs directory: `%LOCALAPPDATA%\ScrmDailyExporter\logs`
+- State directory: `%LOCALAPPDATA%\ScrmDailyExporter\state`
+- App settings file: `%LOCALAPPDATA%\ScrmDailyExporter\app_settings.json`
+- Login browser profile directory: `%LOCALAPPDATA%\ScrmDailyExporter\chrome-profile`
+- Export output directory: `%USERPROFILE%\Documents\每日企微私域任务导出`
+- Reach report workbook: `%USERPROFILE%\Documents\每日企微私域任务导出\社群任务触达人数日报.xlsx`
+
+## Daily Use
+
+1. Open "企微社群任务自动导出".
+2. On first use, click "扫码登录/刷新登录态" and scan the QR code in the Chrome or Edge window.
+3. To change the save location, click "选择导出目录". Manual exports and scheduled exports will both use the saved directory.
+4. "全局自动补导起始日期" defaults to yesterday. Enter today or a future date to avoid backfilling historical data on first run, or clear it to restore the latest 7-day catch-up window.
+5. Click "立即运行一次" to manually export unfinished tasks. The UI shows a 6-task checklist and the latest logs.
+
+The 6 tasks run in this order: super-group undelivered export, customer-group analysis by chat, customer and Moments reach count, group-send customer-group export, reach summary, and store-group reach summary. The last two tasks write to the same workbook: `社群任务触达人数日报.xlsx`.
+
+## Scheduled Run
+
+The installer registers a scheduled task for the current Windows user: `每日企微私域任务导出`.
+
+By default, the app UI opens and runs once every day at 09:40. If the computer is off, the user is not logged in, or a task fails, the next run will automatically catch up unfinished dates.
+
+## Build And Install
+
+Run this from the project directory:
+
+```powershell
+.\build_release.ps1
+```
+
+Build output:
+
+```text
+dist\ScrmDailyExporter
+```
+
+If Inno Setup is not installed, install locally with:
+
+```powershell
+.\install_local.ps1
+```
+
+This copies the app to `%LOCALAPPDATA%\ScrmDailyExporter\app`, creates Start Menu shortcuts, and registers the daily scheduled task.
+
+If Inno Setup 6 is installed on the build machine, run:
+
+```powershell
+.\build_installer.ps1
+```
+
+The installer is generated at:
+
+```text
+installer-output\ScrmDailyExporterSetup.exe
+```
+
+When debugging the UI or scheduler logic, you usually do not need to rebuild the installer. Prefer running the source directly:
+
+```powershell
+.\.venv\Scripts\python.exe app_ui.py
+.\.venv\Scripts\python.exe app_cli.py run --test-mode --plan-only
+```
+
+To verify executable behavior, run `build_release.ps1` first and test the programs in `dist\ScrmDailyExporter`. Only run `build_installer.ps1` when validating installation flow, scheduled task registration, or preparing a package for coworkers.
+
+## Command Line
+
+```powershell
+scrm-exporter.exe run
+scrm-exporter.exe login
+scrm-exporter.exe status
+scrm-exporter.exe install-task
+scrm-exporter.exe uninstall-task
+scrm-exporter.exe run --start-date 2026-07-01
+scrm-exporter.exe install-task --test-mode
+scrm-exporter.exe uninstall-task --test-mode
+scrm-exporter-ui.exe --auto-run
+scrm-exporter-ui.exe --test-mode
+```
+
+You can also specify directories:
+
+```powershell
+scrm-exporter.exe run --config-dir "%LOCALAPPDATA%\ScrmDailyExporter" --data-dir "%USERPROFILE%\Documents\每日企微私域任务导出"
+```
+
+## Test Mode
+
+Use test mode for local validation to avoid overwriting the production scheduled task:
+
+```powershell
+scrm-exporter.exe install-task --test-mode
+scrm-exporter.exe run --test-mode --plan-only
+scrm-exporter-ui.exe --test-mode
+```
+
+Test mode uses the scheduled task name `每日企微私域任务导出-App测试` and separate runtime/output directories.
+
+## Export From A Specific Date
+
+The UI supports exporting from a specified start date. The command line supports the same flow:
+
+```powershell
+scrm-exporter.exe run --start-date 2026-07-01
+```
+
+The exporter runs from the specified date through yesterday. Tasks already marked successful are skipped and are not forcibly re-exported.
+
+## Notes
+
+- Login state is stored only on the current user's computer and is not distributed with the installer.
+- The tool does not bypass account permissions. Exportable data depends on the account used for QR login.
+- Historical backups for `企微社群任务触达客户统计.docx` are disabled by default. To enable them, set `REACH_DOCX_BACKUP_ENABLED=1` in `.env`.
+- If the SCRM backend API or login mechanism changes, the tool needs to be updated.
+
+---
+
 # 企微社群任务自动导出工具
 
 这是可安装版工具，不依赖 Codex，也不要求同事电脑提前安装 Python。
@@ -122,128 +248,5 @@ scrm-exporter.exe run --start-date 2026-07-01
 - 默认不再为 `企微社群任务触达客户统计.docx` 生成历史备份；如需恢复备份，可在 `.env` 设置 `REACH_DOCX_BACKUP_ENABLED=1`。
 - 如果 SCRM 后台接口或登录机制变化，需要更新工具版本。
 
----
 
-# SCRM Daily Exporter
 
-This is an installable Windows tool for daily SCRM community-task exports. It does not require Codex, and coworkers do not need to install Python before using it.
-
-## Default Paths
-
-- App installation directory: `%LOCALAPPDATA%\ScrmDailyExporter\app`
-- Runtime configuration directory: `%LOCALAPPDATA%\ScrmDailyExporter`
-- Logs directory: `%LOCALAPPDATA%\ScrmDailyExporter\logs`
-- State directory: `%LOCALAPPDATA%\ScrmDailyExporter\state`
-- App settings file: `%LOCALAPPDATA%\ScrmDailyExporter\app_settings.json`
-- Login browser profile directory: `%LOCALAPPDATA%\ScrmDailyExporter\chrome-profile`
-- Export output directory: `%USERPROFILE%\Documents\每日企微私域任务导出`
-- Reach report workbook: `%USERPROFILE%\Documents\每日企微私域任务导出\社群任务触达人数日报.xlsx`
-
-## Daily Use
-
-1. Open "企微社群任务自动导出".
-2. On first use, click "扫码登录/刷新登录态" and scan the QR code in the Chrome or Edge window.
-3. To change the save location, click "选择导出目录". Manual exports and scheduled exports will both use the saved directory.
-4. "全局自动补导起始日期" defaults to yesterday. Enter today or a future date to avoid backfilling historical data on first run, or clear it to restore the latest 7-day catch-up window.
-5. Click "立即运行一次" to manually export unfinished tasks. The UI shows a 6-task checklist and the latest logs.
-
-The 6 tasks run in this order: super-group undelivered export, customer-group analysis by chat, customer and Moments reach count, group-send customer-group export, reach summary, and store-group reach summary. The last two tasks write to the same workbook: `社群任务触达人数日报.xlsx`.
-
-## Scheduled Run
-
-The installer registers a scheduled task for the current Windows user: `每日企微私域任务导出`.
-
-By default, the app UI opens and runs once every day at 09:40. If the computer is off, the user is not logged in, or a task fails, the next run will automatically catch up unfinished dates.
-
-## Build And Install
-
-Run this from the project directory:
-
-```powershell
-.\build_release.ps1
-```
-
-Build output:
-
-```text
-dist\ScrmDailyExporter
-```
-
-If Inno Setup is not installed, install locally with:
-
-```powershell
-.\install_local.ps1
-```
-
-This copies the app to `%LOCALAPPDATA%\ScrmDailyExporter\app`, creates Start Menu shortcuts, and registers the daily scheduled task.
-
-If Inno Setup 6 is installed on the build machine, run:
-
-```powershell
-.\build_installer.ps1
-```
-
-The installer is generated at:
-
-```text
-installer-output\ScrmDailyExporterSetup.exe
-```
-
-When debugging the UI or scheduler logic, you usually do not need to rebuild the installer. Prefer running the source directly:
-
-```powershell
-.\.venv\Scripts\python.exe app_ui.py
-.\.venv\Scripts\python.exe app_cli.py run --test-mode --plan-only
-```
-
-To verify executable behavior, run `build_release.ps1` first and test the programs in `dist\ScrmDailyExporter`. Only run `build_installer.ps1` when validating installation flow, scheduled task registration, or preparing a package for coworkers.
-
-## Command Line
-
-```powershell
-scrm-exporter.exe run
-scrm-exporter.exe login
-scrm-exporter.exe status
-scrm-exporter.exe install-task
-scrm-exporter.exe uninstall-task
-scrm-exporter.exe run --start-date 2026-07-01
-scrm-exporter.exe install-task --test-mode
-scrm-exporter.exe uninstall-task --test-mode
-scrm-exporter-ui.exe --auto-run
-scrm-exporter-ui.exe --test-mode
-```
-
-You can also specify directories:
-
-```powershell
-scrm-exporter.exe run --config-dir "%LOCALAPPDATA%\ScrmDailyExporter" --data-dir "%USERPROFILE%\Documents\每日企微私域任务导出"
-```
-
-## Test Mode
-
-Use test mode for local validation to avoid overwriting the production scheduled task:
-
-```powershell
-scrm-exporter.exe install-task --test-mode
-scrm-exporter.exe run --test-mode --plan-only
-scrm-exporter-ui.exe --test-mode
-```
-
-Test mode uses the scheduled task name `每日企微私域任务导出-App测试` and separate runtime/output directories.
-
-## Export From A Specific Date
-
-The UI supports exporting from a specified start date. The command line supports the same flow:
-
-```powershell
-scrm-exporter.exe run --start-date 2026-07-01
-```
-
-The exporter runs from the specified date through yesterday. Tasks already marked successful are skipped and are not forcibly re-exported.
-
-## Notes
-
-- Login state is stored only on the current user's computer and is not distributed with the installer.
-- The tool does not bypass account permissions. Exportable data depends on the account used for QR login.
-- Historical backups for `企微社群任务触达客户统计.docx` are disabled by default. To enable them, set `REACH_DOCX_BACKUP_ENABLED=1` in `.env`.
-- If the SCRM backend API or login mechanism changes, the tool needs to be updated.
