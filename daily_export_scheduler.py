@@ -692,6 +692,25 @@ def is_auth_error(exc: BaseException) -> bool:
     )
 
 
+def is_chrome_debug_port_error(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {exc}"
+    lowered = text.lower()
+    return bool(
+        "winerror 10061" in lowered
+        or "127.0.0.1:9222" in lowered
+        or "localhost:9222" in lowered
+        or "chrome debug port" in lowered
+        or ("debug port" in lowered and "9222" in lowered)
+        or ("connection refused" in lowered and ("127.0.0.1" in lowered or "localhost" in lowered))
+        or ("actively refused" in lowered and ("127.0.0.1" in lowered or "localhost" in lowered))
+        or "由于目标计算机积极拒绝" in text
+    )
+
+
+def should_refresh_login(exc: BaseException) -> bool:
+    return is_auth_error(exc) or is_chrome_debug_port_error(exc)
+
+
 def run_super_group_export(target_date: date, config: SchedulerConfig) -> None:
     output_dir = output_path_for(config, target_date)
     print(
@@ -1354,7 +1373,7 @@ def run_scheduler(
                 reach_summary_exporter.ReachSummaryError,
                 reach_excel_exporter.ReachSummaryError,
             ) as exc:
-                if is_auth_error(exc) and not login_refreshed:
+                if should_refresh_login(exc) and not login_refreshed:
                     write_status(
                         config,
                         "WAITING_LOGIN",
@@ -1399,6 +1418,37 @@ def run_scheduler(
                 print(f"Export failed for {target_date:%Y-%m-%d} [{task.task_id}]: {exc}", file=sys.stderr)
                 return 1
             except Exception as exc:
+                if should_refresh_login(exc) and not login_refreshed:
+                    write_status(
+                        config,
+                        "WAITING_LOGIN",
+                        f"Waiting for QR login before exporting {target_date:%Y-%m-%d} [{task.task_id}].",
+                    )
+                    emit_event(
+                        "WAITING_LOGIN",
+                        date=target_date.isoformat(),
+                        task_id=task.task_id,
+                        label=task.label,
+                    )
+                    if not refresh_login(config):
+                        state = load_state(config.state_path)
+                        mark_task_failure(state, target_date, task, "Login timed out.")
+                        save_state(config.state_path, state)
+                        write_status(
+                            config,
+                            "FAILED",
+                            f"Login timed out before exporting {target_date:%Y-%m-%d} [{task.task_id}].",
+                        )
+                        emit_event(
+                            "TASK_FAILED",
+                            date=target_date.isoformat(),
+                            task_id=task.task_id,
+                            label=task.label,
+                            message="Login timed out.",
+                        )
+                        return 1
+                    login_refreshed = True
+                    continue
                 state = load_state(config.state_path)
                 mark_task_failure(state, target_date, task, f"{type(exc).__name__}: {exc}")
                 save_state(config.state_path, state)
