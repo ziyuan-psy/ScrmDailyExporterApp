@@ -34,6 +34,7 @@ import export_group_send_customer_group as customer_group_exporter
 import export_reach_daily_excel as reach_excel_exporter
 import export_reach_customer_summary as reach_summary_exporter
 import export_super_group_undelivered as exporter
+import sync_feishu_reach_workbook as feishu_sync
 import app_settings
 import runtime_paths
 import state_file_io
@@ -54,6 +55,7 @@ REACH_SUMMARY_TASK_ID = "reach_customer_summary"
 CUSTOMER_GROUP_TASK_ID = "group_send_customer_group_export"
 REACH_EXCEL_SUMMARY_TASK_ID = "reach_excel_summary"
 STORE_GROUP_REACH_TASK_ID = "store_group_reach_summary"
+FEISHU_SYNC_TASK_ID = "feishu_reach_sync"
 
 
 class LoginRefreshError(RuntimeError):
@@ -89,6 +91,7 @@ EXPORT_TASKS = [
     ExportTask(CUSTOMER_GROUP_TASK_ID, "群发客户群导出", "lookback"),
     ExportTask(REACH_EXCEL_SUMMARY_TASK_ID, "触达人数汇总", "lookback"),
     ExportTask(STORE_GROUP_REACH_TASK_ID, "门店分组触达人数", "lookback"),
+    ExportTask(FEISHU_SYNC_TASK_ID, "同步在线表", "lookback"),
 ]
 
 
@@ -601,6 +604,42 @@ def initialize_reach_excel_state_from_existing_workbook(state: Dict[str, Any], r
     return changed
 
 
+def initialize_feishu_sync_state_from_online(state: Dict[str, Any], config: SchedulerConfig) -> bool:
+    if task_successful_dates(state, FEISHU_SYNC_TASK_ID):
+        return False
+
+    xlsx_path = config.root / reach_excel_exporter.DEFAULT_OUTPUT_NAME
+    if not xlsx_path.exists():
+        return False
+
+    try:
+        complete_through = feishu_sync.complete_through_date(config.env_path)
+    except feishu_sync.FeishuSyncError as exc:
+        print(f"Feishu sync state initialization skipped: {exc}", file=sys.stderr)
+        return False
+    if complete_through is None:
+        return False
+
+    changed = False
+    for target_date in feishu_sync.workbook_dates_through(xlsx_path, complete_through):
+        if is_task_success(state, target_date, FEISHU_SYNC_TASK_ID):
+            continue
+        task_record(state, target_date, FEISHU_SYNC_TASK_ID).update(
+            {
+                "status": "success",
+                "completed_at": now_text(),
+                "output_xlsx": xlsx_path.name,
+                "label": "同步在线表",
+                "source": "existing_feishu",
+            }
+        )
+        changed = True
+
+    if changed:
+        update_last_success(state)
+    return changed
+
+
 def ensure_task_start_dates(state: Dict[str, Any], today: date) -> bool:
     state.setdefault("task_start_dates", {})
     return False
@@ -660,7 +699,7 @@ def mark_task_success(state: Dict[str, Any], target_date: date, task: ExportTask
     }
     if task.task_id == REACH_SUMMARY_TASK_ID:
         record["output_docx"] = reach_summary_exporter.DEFAULT_OUTPUT_DOCX
-    if task.task_id in {REACH_EXCEL_SUMMARY_TASK_ID, STORE_GROUP_REACH_TASK_ID}:
+    if task.task_id in {REACH_EXCEL_SUMMARY_TASK_ID, STORE_GROUP_REACH_TASK_ID, FEISHU_SYNC_TASK_ID}:
         record["output_xlsx"] = reach_excel_exporter.DEFAULT_OUTPUT_NAME
     task_record(state, target_date, task.task_id).update(record)
     update_last_success(state)
@@ -677,7 +716,7 @@ def mark_task_failure(state: Dict[str, Any], target_date: date, task: ExportTask
     }
     if task.task_id == REACH_SUMMARY_TASK_ID:
         record["output_docx"] = reach_summary_exporter.DEFAULT_OUTPUT_DOCX
-    if task.task_id in {REACH_EXCEL_SUMMARY_TASK_ID, STORE_GROUP_REACH_TASK_ID}:
+    if task.task_id in {REACH_EXCEL_SUMMARY_TASK_ID, STORE_GROUP_REACH_TASK_ID, FEISHU_SYNC_TASK_ID}:
         record["output_xlsx"] = reach_excel_exporter.DEFAULT_OUTPUT_NAME
     task_record(state, target_date, task.task_id).update(record)
 
@@ -790,6 +829,19 @@ def run_store_group_reach_export(target_date: date, config: SchedulerConfig) -> 
     )
 
 
+def run_feishu_sync_export(target_date: date, config: SchedulerConfig) -> None:
+    output_xlsx = config.root / reach_excel_exporter.DEFAULT_OUTPUT_NAME
+    print(
+        f"\n=== {target_date:%Y-%m-%d} | 同步在线表 -> {output_xlsx} ===",
+        flush=True,
+    )
+    feishu_sync.sync_date(
+        workbook_path=output_xlsx,
+        env_path=config.env_path,
+        target_date=target_date,
+    )
+
+
 def run_customer_group_export(target_date: date, config: SchedulerConfig) -> None:
     output_dir = output_path_for(config, target_date)
     print(
@@ -824,6 +876,9 @@ def run_task_export(task: ExportTask, target_date: date, config: SchedulerConfig
         return
     if task.task_id == STORE_GROUP_REACH_TASK_ID:
         run_store_group_reach_export(target_date, config)
+        return
+    if task.task_id == FEISHU_SYNC_TASK_ID:
+        run_feishu_sync_export(target_date, config)
         return
     raise RuntimeError(f"Unknown export task: {task.task_id}")
 
@@ -1296,6 +1351,7 @@ def run_scheduler(
         state, config.root, today
     )
     reach_excel_initialized = initialize_reach_excel_state_from_existing_workbook(state, config.root)
+    feishu_sync_initialized = initialize_feishu_sync_state_from_online(state, config)
     starts_initialized = ensure_task_start_dates(state, today)
     effective_start_date = start_date or config.global_start_date
     pending = pending_task_runs(state, today, config.catchup_lookback_days, effective_start_date)
@@ -1313,6 +1369,7 @@ def run_scheduler(
     print(f"Reach summary initialized from existing docx: {reach_initialized}")
     print(f"Customer group initialized from existing files: {customer_group_initialized}")
     print(f"Reach Excel initialized from existing workbook: {reach_excel_initialized}")
+    print(f"Feishu sync initialized from online sheets: {feishu_sync_initialized}")
     print(f"Task start dates initialized: {starts_initialized}")
     print(f"Pending task runs: {pending_text or '(none)'}")
     emit_event("RUN_PENDING", pending=pending_text, today=today.isoformat())
@@ -1326,6 +1383,7 @@ def run_scheduler(
         or reach_initialized
         or customer_group_initialized
         or reach_excel_initialized
+        or feishu_sync_initialized
         or starts_initialized
     ):
         save_state(config.state_path, state)
@@ -1372,6 +1430,7 @@ def run_scheduler(
                 customer_group_exporter.GroupSendCustomerGroupError,
                 reach_summary_exporter.ReachSummaryError,
                 reach_excel_exporter.ReachSummaryError,
+                feishu_sync.FeishuSyncError,
             ) as exc:
                 if should_refresh_login(exc) and not login_refreshed:
                     write_status(

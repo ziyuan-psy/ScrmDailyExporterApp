@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_submodules
 
 
 hiddenimports = collect_submodules("docx") + collect_submodules("openpyxl")
-common_datas = [(".env.example", "."), ("README_APP.md", ".")]
+common_datas = [(".env.example", "."), ("README.md", ".")]
 
 cli = Analysis(
     ["scrm_exporter.py"],

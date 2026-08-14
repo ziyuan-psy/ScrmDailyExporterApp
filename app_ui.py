@@ -15,6 +15,7 @@ import app_cli
 import app_settings
 import daily_export_scheduler
 import runtime_paths
+import sync_feishu_reach_workbook as feishu_sync
 
 
 TASKS = [
@@ -24,6 +25,7 @@ TASKS = [
     ("group_send_customer_group_export", "群发客户群导出"),
     ("reach_excel_summary", "触达人数汇总"),
     ("store_group_reach_summary", "门店分组触达人数"),
+    ("feishu_reach_sync", "同步在线表"),
 ]
 
 STATUS_COLORS = {
@@ -104,6 +106,149 @@ def open_dir(path: Path) -> None:
     os.startfile(str(path))
 
 
+def format_optional_date(value: Optional[date]) -> str:
+    return value.isoformat() if value else "暂无日期"
+
+
+class FeishuConfigDialog(tk.Toplevel):
+    def __init__(self, parent: "ExporterUI", env_path: Path) -> None:
+        super().__init__(parent)
+        self.parent = parent
+        self.env_path = env_path
+        env_file = feishu_sync.load_dotenv(env_path)
+        self.title("飞书同步配置")
+        self.resizable(False, False)
+        self.enabled_var = tk.BooleanVar(value=feishu_sync.env_bool(env_file, "FEISHU_SYNC_ENABLED", False))
+        self.app_id_var = tk.StringVar(value=feishu_sync.env_value(env_file, "FEISHU_APP_ID"))
+        self.app_secret_var = tk.StringVar(value=feishu_sync.env_value(env_file, "FEISHU_APP_SECRET"))
+        self.summary_url_var = tk.StringVar(value=feishu_sync.env_value(env_file, "FEISHU_SUMMARY_SHEET_URL"))
+        self.store_group_url_var = tk.StringVar(value=feishu_sync.env_value(env_file, "FEISHU_STORE_GROUP_SHEET_URL"))
+        self.status_var = tk.StringVar(value="")
+        self._build()
+        self.transient(parent)
+        self.grab_set()
+        if self.app_id_var.get().strip():
+            self.summary_entry.focus_set()
+        else:
+            self.app_id_entry.focus_set()
+
+    def _build(self) -> None:
+        frame = ttk.Frame(self, padding=(16, 14))
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(1, weight=1)
+
+        ttk.Checkbutton(frame, text="启用飞书同步", variable=self.enabled_var).grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 10),
+        )
+        ttk.Label(frame, text="App ID").grid(row=1, column=0, sticky="w", pady=(0, 6))
+        self.app_id_entry = ttk.Entry(frame, textvariable=self.app_id_var, width=86)
+        self.app_id_entry.grid(row=1, column=1, sticky="ew", pady=(0, 6))
+
+        ttk.Label(frame, text="App Secret").grid(row=2, column=0, sticky="w", pady=(0, 6))
+        ttk.Entry(frame, textvariable=self.app_secret_var, width=86, show="*").grid(
+            row=2,
+            column=1,
+            sticky="ew",
+            pady=(0, 6),
+        )
+
+        ttk.Label(frame, text="触达人数汇总链接").grid(row=3, column=0, sticky="w", pady=(0, 6))
+        self.summary_entry = ttk.Entry(frame, textvariable=self.summary_url_var, width=86)
+        self.summary_entry.grid(row=3, column=1, sticky="ew", pady=(0, 6))
+
+        ttk.Label(frame, text="门店分组触达人数链接").grid(row=4, column=0, sticky="w", pady=(0, 6))
+        ttk.Entry(frame, textvariable=self.store_group_url_var, width=86).grid(
+            row=4,
+            column=1,
+            sticky="ew",
+            pady=(0, 6),
+        )
+
+        ttk.Label(
+            frame,
+            text="同事首次安装后填 App ID、App Secret 和两个在线表 sheet 链接；程序会自动解析文档 token 和 sheet id。",
+            foreground="#4b5563",
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(2, 10))
+        ttk.Label(frame, textvariable=self.status_var, foreground="#4b5563").grid(
+            row=6,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(0, 10),
+        )
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=7, column=0, columnspan=2, sticky="e")
+        ttk.Button(buttons, text="测试连接", command=self.test_connection).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(buttons, text="保存", command=self.save).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(buttons, text="取消", command=self.destroy).grid(row=0, column=2)
+
+    def current_links(self) -> tuple[str, str]:
+        return self.summary_url_var.get().strip(), self.store_group_url_var.get().strip()
+
+    def current_credentials(self) -> tuple[str, str]:
+        return self.app_id_var.get().strip(), self.app_secret_var.get().strip()
+
+    def test_connection(self) -> None:
+        summary_url, store_group_url = self.current_links()
+        app_id, app_secret = self.current_credentials()
+        try:
+            config = feishu_sync.config_from_values(
+                self.env_path,
+                app_id,
+                app_secret,
+                summary_url,
+                store_group_url,
+            )
+            feishu_sync.require_config(config)
+            client = feishu_sync.FeishuClient(config)
+            client.connect()
+            summary_state, store_state = feishu_sync.read_online_states(client)
+        except feishu_sync.FeishuSyncError as exc:
+            messagebox.showerror("测试失败", str(exc), parent=self)
+            return
+
+        message = (
+            "连接成功。\n"
+            f"触达人数汇总已到：{format_optional_date(summary_state.max_date)}\n"
+            f"门店分组触达人数已到：{format_optional_date(store_state.max_date)}"
+        )
+        self.status_var.set(message.replace("\n", "  "))
+        messagebox.showinfo("测试成功", message, parent=self)
+
+    def save(self) -> None:
+        summary_url, store_group_url = self.current_links()
+        app_id, app_secret = self.current_credentials()
+        try:
+            if self.enabled_var.get() or summary_url or store_group_url:
+                feishu_sync.save_sync_config(
+                    self.env_path,
+                    app_id,
+                    app_secret,
+                    summary_url,
+                    store_group_url,
+                    enabled=self.enabled_var.get(),
+                )
+            else:
+                feishu_sync.update_dotenv_values(
+                    self.env_path,
+                    {
+                        "FEISHU_SYNC_ENABLED": "0",
+                        "FEISHU_APP_ID": app_id,
+                        "FEISHU_APP_SECRET": app_secret,
+                    },
+                )
+        except feishu_sync.FeishuSyncError as exc:
+            messagebox.showerror("保存失败", str(exc), parent=self)
+            return
+        self.parent.message_var.set("飞书同步配置已保存。")
+        self.destroy()
+
+
 class ExporterUI(tk.Tk):
     def __init__(self, args: argparse.Namespace) -> None:
         super().__init__()
@@ -160,6 +305,7 @@ class ExporterUI(tk.Tk):
         self.run_button = ttk.Button(buttons, text="立即运行一次", command=self.run_now)
         self.output_button = ttk.Button(buttons, text="打开导出文件夹", command=lambda: open_dir(self.data_dir))
         self.logs_button = ttk.Button(buttons, text="打开日志文件夹", command=lambda: open_dir(runtime_paths.logs_dir(self.config_dir)))
+        self.feishu_button = ttk.Button(buttons, text="飞书同步配置", command=self.open_feishu_config)
         self.install_button = ttk.Button(buttons, text="重新安装计划任务", command=self.install_task)
         self.uninstall_button = ttk.Button(buttons, text="卸载计划任务", command=self.uninstall_task)
         for index, button in enumerate(
@@ -168,6 +314,7 @@ class ExporterUI(tk.Tk):
                 self.run_button,
                 self.output_button,
                 self.logs_button,
+                self.feishu_button,
                 self.install_button,
                 self.uninstall_button,
             ]
@@ -201,7 +348,7 @@ class ExporterUI(tk.Tk):
         body = ttk.PanedWindow(self, orient=tk.VERTICAL)
         body.grid(row=4, column=0, sticky="nsew", padx=14, pady=(0, 14))
 
-        checklist = ttk.LabelFrame(body, text="6 个导出任务 checklist", padding=(10, 8))
+        checklist = ttk.LabelFrame(body, text="7 个导出任务 checklist", padding=(10, 8))
         checklist.columnconfigure(1, weight=1)
         for row, (task_id, label) in enumerate(TASKS):
             status_var = tk.StringVar(value="未开始")
@@ -350,6 +497,9 @@ class ExporterUI(tk.Tk):
     def login(self) -> None:
         self.start_process("login")
 
+    def open_feishu_config(self) -> None:
+        FeishuConfigDialog(self, runtime_paths.env_path(self.config_dir))
+
     def run_admin_command(self, command: str, success: str) -> None:
         completed = subprocess.run(
             self.command_args(command),
@@ -393,6 +543,7 @@ class ExporterUI(tk.Tk):
         self.start_date_button.configure(state=button_state)
         self.login_button.configure(state=button_state)
         self.choose_dir_button.configure(state=button_state)
+        self.feishu_button.configure(state=button_state)
         self.save_global_start_button.configure(state=button_state)
         self.after(1500, self.refresh)
 

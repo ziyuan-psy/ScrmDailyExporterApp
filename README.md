@@ -19,9 +19,9 @@ This is an installable Windows tool for daily SCRM community-task exports. It do
 2. On first use, click "扫码登录/刷新登录态" and scan the QR code in the Chrome or Edge window.
 3. To change the save location, click "选择导出目录". Manual exports and scheduled exports will both use the saved directory.
 4. "全局自动补导起始日期" defaults to yesterday. Enter today or a future date to avoid backfilling historical data on first run, or clear it to restore the latest 7-day catch-up window.
-5. Click "立即运行一次" to manually export unfinished tasks. The UI shows a 6-task checklist and the latest logs.
+5. Click "立即运行一次" to manually export unfinished tasks. The UI shows a 7-task checklist and the latest logs.
 
-The 6 tasks run in this order: super-group undelivered export, customer-group analysis by chat, customer and Moments reach count, group-send customer-group export, reach summary, and store-group reach summary. The last two tasks write to the same workbook: `社群任务触达人数日报.xlsx`.
+The 7 tasks run in this order: super-group undelivered export, customer-group analysis by chat, customer and Moments reach count, group-send customer-group export, reach summary, store-group reach summary, and Feishu online spreadsheet sync. Tasks 5 and 6 write to the local workbook `社群任务触达人数日报.xlsx`; task 7 appends only new dates from that workbook to Feishu and never overwrites existing online rows.
 
 ## Scheduled Run
 
@@ -93,6 +93,35 @@ You can also specify directories:
 scrm-exporter.exe run --config-dir "%LOCALAPPDATA%\ScrmDailyExporter" --data-dir "%USERPROFILE%\Documents\每日企微私域任务导出"
 ```
 
+## Feishu Sync
+
+Feishu sync is disabled by default. Open "飞书同步配置" in the app, then fill the Feishu `App ID`, `App Secret`, and the two online sheet links. The app saves these values to `%LOCALAPPDATA%\ScrmDailyExporter\.env` for the current Windows user.
+
+The app parses the document token and sheet IDs from the links automatically:
+
+```text
+App ID
+App Secret
+触达人数汇总 sheet link
+门店分组触达人数 sheet link
+```
+
+Advanced/manual `.env` configuration is also supported:
+
+```text
+FEISHU_SYNC_ENABLED=1
+FEISHU_APP_ID=cli_xxxxx
+FEISHU_APP_SECRET=paste_app_secret_here
+FEISHU_SUMMARY_SHEET_URL=https://example.feishu.cn/wiki/xxx?sheet=ba5a9a
+FEISHU_STORE_GROUP_SHEET_URL=https://example.feishu.cn/wiki/xxx?sheet=6Dks8k
+FEISHU_WIKI_TOKEN=
+FEISHU_SUMMARY_SHEET_ID=ba5a9a
+FEISHU_STORE_GROUP_SHEET_ID=6Dks8k
+FEISHU_SCAN_ROWS=5000
+```
+
+The sync reads the local workbook and the online sheets first. For each target date, it appends rows only when the date is newer than the latest date already present in the corresponding online sheet. Existing local workbook rows and existing Feishu rows are not modified.
+
 ## Test Mode
 
 Use test mode for local validation to avoid overwriting the production scheduled task:
@@ -120,6 +149,7 @@ The exporter runs from the specified date through yesterday. Tasks already marke
 - Login state is stored only on the current user's computer and is not distributed with the installer.
 - The tool does not bypass account permissions. Exportable data depends on the account used for QR login.
 - Historical backups for `企微社群任务触达客户统计.docx` are disabled by default. To enable them, set `REACH_DOCX_BACKUP_ENABLED=1` in `.env`.
+- Feishu app secrets must stay in the local `.env` file and should not be committed.
 - If the SCRM backend API or login mechanism changes, the tool needs to be updated.
 
 ---
@@ -145,9 +175,9 @@ The exporter runs from the specified date through yesterday. Tasks already marke
 2. 首次使用点击“扫码登录/刷新登录态”，在打开的 Chrome 或 Edge 窗口扫码登录。
 3. 如需更换保存位置，点击“选择导出目录”；保存后手动导出和计划任务都会使用新目录。
 4. “全局自动补导起始日期”默认是昨天；可填今天或未来日期来避免首次运行补导历史，清空后恢复最近 7 天补导。
-5. 点击“立即运行一次”可手动补导未完成任务；控制台会显示 6 个任务的 checklist 和最近日志。
+5. 点击“立即运行一次”可手动补导未完成任务；控制台会显示 7 个任务的 checklist 和最近日志。
 
-6 个任务依次为：超级群发未送达、客户群分析-按群聊、群发客户及朋友圈触达人数、群发客户群导出、触达人数汇总、门店分组触达人数。后两个任务会写入同一份 `社群任务触达人数日报.xlsx`。
+7 个任务依次为：超级群发未送达、客户群分析-按群聊、群发客户及朋友圈触达人数、群发客户群导出、触达人数汇总、门店分组触达人数、同步在线表。第 5、6 个任务会写入本地 `社群任务触达人数日报.xlsx`，第 7 个任务只把本地表里比在线表更新的日期追加到飞书，不覆盖在线表已有行。
 
 ## 自动运行
 
@@ -219,6 +249,33 @@ scrm-exporter-ui.exe --test-mode
 scrm-exporter.exe run --config-dir "%LOCALAPPDATA%\ScrmDailyExporter" --data-dir "%USERPROFILE%\Documents\每日企微私域任务导出"
 ```
 
+## 飞书同步
+
+飞书同步默认关闭。同事打开 app 里的“飞书同步配置”，填写飞书 `App ID`、`App Secret` 和两条在线表链接即可；程序会把这些配置保存到当前 Windows 用户的 `%LOCALAPPDATA%\ScrmDailyExporter\.env`。
+
+```text
+App ID
+App Secret
+触达人数汇总 sheet 链接
+门店分组触达人数 sheet 链接
+```
+
+程序会自动从链接里解析文档 token 和两个 sheet id。也可以手动在 `.env` 里配置：
+
+```text
+FEISHU_SYNC_ENABLED=1
+FEISHU_APP_ID=cli_xxxxx
+FEISHU_APP_SECRET=paste_app_secret_here
+FEISHU_SUMMARY_SHEET_URL=https://example.feishu.cn/wiki/xxx?sheet=ba5a9a
+FEISHU_STORE_GROUP_SHEET_URL=https://example.feishu.cn/wiki/xxx?sheet=6Dks8k
+FEISHU_WIKI_TOKEN=
+FEISHU_SUMMARY_SHEET_ID=ba5a9a
+FEISHU_STORE_GROUP_SHEET_ID=6Dks8k
+FEISHU_SCAN_ROWS=5000
+```
+
+同步任务会先读取本地 workbook 和飞书在线表。对每个目标日期，只有当这个日期比对应在线 sheet 里已有的最大日期更新时才追加写入；本地旧行和飞书旧行都不会被修改。
+
 ## 测试模式
 
 本机测试时可使用测试模式，避免覆盖已有生产计划任务：
@@ -246,6 +303,7 @@ scrm-exporter.exe run --start-date 2026-07-01
 - 登录态只保存在当前用户电脑上，不随安装包分发。
 - 工具不会绕过账号权限，能导出什么取决于当前扫码账号权限。
 - 默认不再为 `企微社群任务触达客户统计.docx` 生成历史备份；如需恢复备份，可在 `.env` 设置 `REACH_DOCX_BACKUP_ENABLED=1`。
+- 飞书应用密钥只应保存在本机 `.env` 文件里，不要提交到仓库。
 - 如果 SCRM 后台接口或登录机制变化，需要更新工具版本。
 
 
