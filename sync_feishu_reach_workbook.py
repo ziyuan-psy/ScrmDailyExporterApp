@@ -34,6 +34,9 @@ SUMMARY_DATA_START_ROW = 3
 STORE_GROUP_DATA_START_ROW = 2
 SUMMARY_COLUMNS = 9
 STORE_GROUP_COLUMNS = 5
+ALIGN_CENTER = 1
+DATE_FORMATTER = "yyyy/MM/dd"
+NUMBER_FORMATTER = "#,##0"
 WEEKDAYS = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 
 
@@ -396,6 +399,65 @@ class FeishuClient:
             token=self.tenant_access_token,
         )
 
+    def set_style(self, range_name: str, style: Dict[str, Any]) -> None:
+        url = (
+            f"{BASE_URL}/sheets/v2/spreadsheets/"
+            + urllib.parse.quote(self.spreadsheet_token, safe="")
+            + "/style"
+        )
+        request_json(
+            "PUT",
+            url,
+            {"appendStyle": {"range": range_name, "style": style}},
+            token=self.tenant_access_token,
+        )
+
+    def format_summary_rows(self, start_row: int, row_count: int) -> None:
+        if row_count <= 0:
+            return
+        end_row = start_row + row_count - 1
+        self.set_style(
+            f"{self.config.summary_sheet_id}!A{start_row}:I{end_row}",
+            centered_style(),
+        )
+        self.set_style(
+            f"{self.config.summary_sheet_id}!A{start_row}:A{end_row}",
+            centered_style(DATE_FORMATTER),
+        )
+        for column in ("C", "F", "I"):
+            self.set_style(
+                f"{self.config.summary_sheet_id}!{column}{start_row}:{column}{end_row}",
+                centered_style(NUMBER_FORMATTER),
+            )
+
+    def format_store_group_rows(self, start_row: int, row_count: int) -> None:
+        if row_count <= 0:
+            return
+        end_row = start_row + row_count - 1
+        self.set_style(
+            f"{self.config.store_group_sheet_id}!A{start_row}:E{end_row}",
+            centered_style(),
+        )
+        self.set_style(
+            f"{self.config.store_group_sheet_id}!A{start_row}:A{end_row}",
+            centered_style(DATE_FORMATTER),
+        )
+        self.set_style(
+            f"{self.config.store_group_sheet_id}!E{start_row}:E{end_row}",
+            centered_style(NUMBER_FORMATTER),
+        )
+
+
+def centered_style(formatter: str = "") -> Dict[str, Any]:
+    style: Dict[str, Any] = {
+        "hAlign": ALIGN_CENTER,
+        "vAlign": ALIGN_CENTER,
+        "clean": False,
+    }
+    if formatter:
+        style["formatter"] = formatter
+    return style
+
 
 def is_non_empty(value: Any) -> bool:
     return value is not None and value != ""
@@ -540,8 +602,74 @@ def read_online_states(client: FeishuClient) -> Tuple[OnlineSheetState, OnlineSh
     )
 
 
+def row_spans_for_dates(
+    values: List[List[Any]],
+    data_start_row: int,
+    target_dates: set[date],
+) -> List[Tuple[int, int]]:
+    spans: List[Tuple[int, int]] = []
+    span_start: Optional[int] = None
+    previous_row: Optional[int] = None
+
+    for index, row in enumerate(values, start=1):
+        if index < data_start_row:
+            continue
+        row_date = parse_date_value(row[0] if row else None)
+        if row_date not in target_dates:
+            if span_start is not None and previous_row is not None:
+                spans.append((span_start, previous_row - span_start + 1))
+                span_start = None
+                previous_row = None
+            continue
+
+        if span_start is None:
+            span_start = index
+        previous_row = index
+
+    if span_start is not None and previous_row is not None:
+        spans.append((span_start, previous_row - span_start + 1))
+    return spans
+
+
 def should_append(target_date: date, state: OnlineSheetState) -> bool:
     return state.max_date is None or target_date > state.max_date
+
+
+def format_existing_date(env_path: Path, target_date: date) -> Dict[str, int]:
+    config = load_config(env_path)
+    if not config.enabled:
+        print("Feishu sync disabled; set FEISHU_SYNC_ENABLED=1 to enable.")
+        return {"summary": 0, "store_group": 0}
+
+    client = FeishuClient(config)
+    client.connect()
+    summary_state, store_state = read_online_states(client)
+    target_dates = {target_date}
+
+    summary_rows_formatted = 0
+    for start_row, row_count in row_spans_for_dates(
+        summary_state.values,
+        SUMMARY_DATA_START_ROW,
+        target_dates,
+    ):
+        client.format_summary_rows(start_row, row_count)
+        summary_rows_formatted += row_count
+
+    store_rows_formatted = 0
+    for start_row, row_count in row_spans_for_dates(
+        store_state.values,
+        STORE_GROUP_DATA_START_ROW,
+        target_dates,
+    ):
+        client.format_store_group_rows(start_row, row_count)
+        store_rows_formatted += row_count
+
+    print(
+        f"Feishu format {target_date:%Y-%m-%d}: "
+        f"summary rows formatted={summary_rows_formatted}, "
+        f"store-group rows formatted={store_rows_formatted}."
+    )
+    return {"summary": summary_rows_formatted, "store_group": store_rows_formatted}
 
 
 def sync_date(workbook_path: Path, env_path: Path, target_date: date, dry_run: bool = False) -> Dict[str, int]:
@@ -567,6 +695,7 @@ def sync_date(workbook_path: Path, env_path: Path, target_date: date, dry_run: b
             print(f"Would append 1 summary row at {config.summary_sheet_id}!A{start_row}:I{start_row}.")
         else:
             client.append_rows(config.summary_sheet_id, start_row, "I", [row])
+            client.format_summary_rows(start_row, 1)
         summary_rows_appended = 1
     else:
         print(
@@ -585,6 +714,7 @@ def sync_date(workbook_path: Path, env_path: Path, target_date: date, dry_run: b
             print(f"Would append {len(rows)} store-group rows at {config.store_group_sheet_id}!A{start_row}:E{end_row}.")
         else:
             client.append_rows(config.store_group_sheet_id, start_row, "E", rows)
+            client.format_store_group_rows(start_row, len(rows))
         store_rows_appended = len(rows)
     else:
         print(
@@ -624,15 +754,23 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--env", required=True, help="Runtime .env path.")
     parser.add_argument("--date", required=True, help="Date to sync, YYYY-MM-DD.")
     parser.add_argument("--dry-run", action="store_true", help="Read both sides and print what would be appended.")
+    parser.add_argument("--format-only", action="store_true", help="Only format existing online rows for the date.")
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
+    target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
+    if args.format_only:
+        format_existing_date(
+            env_path=Path(args.env).expanduser(),
+            target_date=target_date,
+        )
+        return 0
     sync_date(
         workbook_path=Path(args.workbook).expanduser(),
         env_path=Path(args.env).expanduser(),
-        target_date=datetime.strptime(args.date, "%Y-%m-%d").date(),
+        target_date=target_date,
         dry_run=args.dry_run,
     )
     return 0
