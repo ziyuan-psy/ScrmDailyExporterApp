@@ -44,7 +44,7 @@ LOGIN_URL = "https://scrm.cotticoffee.cc/login"
 SCRM_HOST = "scrm.cotticoffee.cc"
 DEFAULT_LOGIN_WAIT_MINUTES = 20
 DEFAULT_CATCHUP_LOOKBACK_DAYS = 7
-DEFAULT_CHROME_DEBUG_PORT = 9222
+DEFAULT_CHROME_DEBUG_PORT = 9333
 STATE_DIR_NAME = "state"
 STATE_FILE_NAME = "export_state.json"
 STATUS_FILE_NAME = "latest_status.txt"
@@ -737,9 +737,12 @@ def is_chrome_debug_port_error(exc: BaseException) -> bool:
     return bool(
         "winerror 10061" in lowered
         or "127.0.0.1:9222" in lowered
+        or "127.0.0.1:9333" in lowered
         or "localhost:9222" in lowered
+        or "localhost:9333" in lowered
         or "chrome debug port" in lowered
         or ("debug port" in lowered and "9222" in lowered)
+        or ("debug port" in lowered and "9333" in lowered)
         or ("connection refused" in lowered and ("127.0.0.1" in lowered or "localhost" in lowered))
         or ("actively refused" in lowered and ("127.0.0.1" in lowered or "localhost" in lowered))
         or "由于目标计算机积极拒绝" in text
