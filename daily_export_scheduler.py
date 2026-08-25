@@ -48,7 +48,6 @@ DEFAULT_CHROME_DEBUG_PORT = 9333
 STATE_DIR_NAME = "state"
 STATE_FILE_NAME = "export_state.json"
 STATUS_FILE_NAME = "latest_status.txt"
-CHROME_PROFILE_DIR_NAME = "chrome-login-profile"
 SUPER_GROUP_TASK_ID = "super_group_undelivered"
 CHAT_ANALYSIS_TASK_ID = "chat_group_analysis_by_chat"
 REACH_SUMMARY_TASK_ID = "reach_customer_summary"

@@ -48,7 +48,7 @@ ScrmDailyExporterSetup.exe
 | 日志目录 | `%LOCALAPPDATA%\ScrmDailyExporter\logs` |
 | 状态目录 | `%LOCALAPPDATA%\ScrmDailyExporter\state` |
 | GUI 设置文件 | `%LOCALAPPDATA%\ScrmDailyExporter\app_settings.json` |
-| 登录浏览器资料目录 | `%LOCALAPPDATA%\ScrmDailyExporter\chrome-login-profile` |
+| 登录浏览器资料目录 | `%LOCALAPPDATA%\ScrmDailyExporter\chrome-profile` |
 | 默认导出目录 | `%USERPROFILE%\Documents\每日企微私域任务导出` |
 | 触达人数日报 | `%USERPROFILE%\Documents\每日企微私域任务导出\社群任务触达人数日报.xlsx` |
 
@@ -265,7 +265,7 @@ installer-output\ScrmDailyExporterSetup.exe
 | `state\export_state.json` | 每个任务最近成功日期 |
 | `state\latest_status.txt` | GUI 当前状态摘要 |
 | `app_settings.json` | GUI 保存的导出目录和全局补导起始日期 |
-| `chrome-login-profile` | 登录专用 Chrome profile |
+| `chrome-profile` | 登录专用 Chrome profile |
 
 不要提交或转发 `.env`。如果同事需要独立使用，让同事在自己电脑上扫码登录，并在 GUI 中填写自己的飞书同步配置。
 
