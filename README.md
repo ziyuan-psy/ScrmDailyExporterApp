@@ -1,3 +1,486 @@
+<a id="english"></a>
+
+# SCRM Daily Exporter
+
+[English](#english) | [中文](#chinese)
+
+An installable Windows GUI application that automatically exports daily WeCom SCRM community-task data, generates local summary reports, and can optionally append daily reach metrics to Feishu spreadsheets.
+
+End users do not need Python installed. A Python development environment is required only to maintain the source code, rebuild the application, or change its logic.
+
+## 1. Using the Current GUI
+
+### 1.1 What the application does
+
+After installation, the application catches up on incomplete dates and runs seven tasks in a fixed order:
+
+1. Export undelivered Super Mass Messaging records
+2. Export Customer Group Analytics by group chat
+3. Calculate reach for customer mass messages and Moments posts
+4. Export customer-group mass-message records
+5. Generate the reach summary
+6. Generate reach by store group
+7. Sync reports to Feishu spreadsheets
+
+Tasks 1–4 export raw files and Word summaries from the WeCom admin console. Tasks 5–6 use the local exports to generate <code>社群任务触达人数日报.xlsx</code> (Daily Community-Task Reach Report). When Feishu sync is enabled, Task 7 appends dates from the local report that are newer than those already in the online spreadsheets.
+
+### 1.2 Installation and first-time setup
+
+End users only need to run the installer:
+
+~~~text
+ScrmDailyExporterSetup.exe
+~~~
+
+The installer automatically:
+
+- Installs the application to <code>%LOCALAPPDATA%\ScrmDailyExporter\app</code>
+- Creates the Start menu shortcut <code>SCRM Daily Exporter</code>
+- Registers the current Windows user's scheduled task <code>每日企微私域任务导出</code>
+- Opens the GUI and runs the workflow once per day at 09:40 by default
+
+On first use, open <code>企微社群任务自动导出</code> and click <code>扫码登录/刷新登录态</code> (Scan to Log In / Refresh Session). Scan the QR code in the Chrome window that opens to sign in to the WeCom admin console.
+
+The login session is stored only on the current computer and is never included with the installer or source code. You must scan again after changing computers or accounts, after the session expires, or whenever the WeCom admin console requires a new login.
+
+### 1.3 Default paths
+
+| Item | Path |
+| --- | --- |
+| Application directory | <code>%LOCALAPPDATA%\ScrmDailyExporter\app</code> |
+| Runtime configuration directory | <code>%LOCALAPPDATA%\ScrmDailyExporter</code> |
+| Log directory | <code>%LOCALAPPDATA%\ScrmDailyExporter\logs</code> |
+| State directory | <code>%LOCALAPPDATA%\ScrmDailyExporter\state</code> |
+| GUI settings file | <code>%LOCALAPPDATA%\ScrmDailyExporter\app_settings.json</code> |
+| Login browser profile | <code>%LOCALAPPDATA%\ScrmDailyExporter\chrome-profile</code> |
+| Default export directory | <code>%USERPROFILE%\Documents\每日企微私域任务导出</code> |
+| Daily reach report | <code>%USERPROFILE%\Documents\每日企微私域任务导出\社群任务触达人数日报.xlsx</code> |
+
+### 1.4 GUI controls
+
+| Control | Purpose |
+| --- | --- |
+| <code>扫码登录/刷新登录态</code> | Opens a dedicated Chrome login window and refreshes the local WeCom login information in <code>.env</code> after QR-code login |
+| <code>立即运行一次</code> | Immediately runs all currently incomplete tasks |
+| <code>打开导出文件夹</code> | Opens the local export directory |
+| <code>打开日志文件夹</code> | Opens the log directory |
+| <code>飞书同步配置</code> | Configures the App ID, App Secret, and links to the two Feishu spreadsheet sheets |
+| <code>重新安装计划任务</code> | Re-registers the scheduled task that runs daily at 09:40 |
+| <code>卸载计划任务</code> | Removes the daily scheduled task without deleting the application or historical exports |
+| <code>从指定日期开始导出</code> | Runs from the entered date through yesterday and skips tasks that have already succeeded |
+| <code>全局自动补导起始日期</code> | Sets the earliest date for automatic catch-up; clearing it restores the default seven-day catch-up window |
+
+### 1.5 Output files
+
+The export directory contains a dated folder for each day as well as cross-date summary files. Daily raw Excel files are stored in folders such as:
+
+~~~text
+%USERPROFILE%\Documents\每日企微私域任务导出\社群任务0825
+~~~
+
+Typical outputs include:
+
+| File | Location | Source |
+| --- | --- | --- |
+| Super Mass Messaging Excel files | Daily dated folder | Task 1, exported from the WeCom admin console |
+| Customer Group Analytics by group chat Excel files | Daily dated folder | Task 2, exported from the WeCom admin console |
+| <code>企微社群任务触达客户统计.docx</code> | Export directory root | Task 3, summarizes reach for customer mass messages and Moments posts |
+| Customer-group mass-message Excel files | Daily dated folder | Task 4, exported from the WeCom admin console |
+| <code>社群任务触达人数日报.xlsx</code> | Export directory root | Tasks 5–6, contains the overall reach summary and reach by store group |
+
+Rules for writing <code>企微社群任务触达客户统计.docx</code>:
+
+- The file is stored in the export directory root rather than split into one Word file per day.
+- Each date has its own section, with a heading formatted like <code>2026.8.25</code>.
+- Each date section always contains two lines: reach for that day's <code>群发客户</code> tasks and reach for that day's <code>群发朋友圈</code> tasks.
+- Each line records the number of matched tasks and the reach of every task. If there is more than one task of the same type, the daily total is also included.
+- Running the same date again replaces that date's existing section instead of appending a duplicate. The file is not updated if its contents have not changed.
+
+The current <code>社群任务触达人数日报.xlsx</code> workbook contains:
+
+- <code>触达人数汇总</code> (Reach Summary)
+- <code>门店分组触达人数</code> (Reach by Store Group)
+- <code>说明</code> (Notes)
+
+Key columns in <code>触达人数汇总</code>:
+
+| Column | Contents |
+| --- | --- |
+| A | Date, formatted as <code>yyyy/mm/dd</code> |
+| B | Day of week, formatted from <code>星期一</code> through <code>星期日</code> |
+| C | Welfare-account friends, sourced from total customer mass-message reach in the Word report |
+| F | Community groups, sourced from community-task reach |
+| I | Moments, sourced from total Moments-post reach in the Word report |
+
+Key columns in <code>门店分组触达人数</code>:
+
+| Column | Contents |
+| --- | --- |
+| A | Date |
+| B | Type |
+| C | Store group |
+| D | Coupon type |
+| E | Reach |
+
+### 1.6 Business rules and metric definitions
+
+#### Task-title filters
+
+By default, export tasks exclude titles containing any of the following keywords:
+
+- <code>测试</code> (test)
+- <code>海外</code> (overseas)
+- <code>境外</code> (outside mainland China)
+
+This applies to:
+
+- Undelivered Super Mass Messaging records
+- Customer-group mass-message exports
+- Reach for customer mass messages and Moments posts
+
+Related configuration variables:
+
+| Task | Configuration variable |
+| --- | --- |
+| Undelivered Super Mass Messaging records | <code>EXCLUDE_TASK_KEYWORDS</code> |
+| Customer-group mass-message exports | <code>CUSTOMER_GROUP_EXCLUDE_KEYWORDS</code> |
+| Customer mass-message and Moments reach | <code>REACH_EXCLUDE_KEYWORDS</code> |
+
+If the exclusion-keyword setting is empty, no tasks are excluded by keyword. If inclusion keywords are configured, only task titles matching an inclusion keyword are exported.
+
+#### Community-group reach
+
+Community-group reach is calculated from task-export Excel files in each daily folder:
+
+- Only rows with <code>送达状态=已送达</code> (Delivery Status = Delivered) are counted.
+- <code>客户群chatid（本应用）</code> in each task file is matched to <code>客户群ID</code> in the customer-group statistics file.
+- After a successful match, the corresponding <code>群客户总数</code> (total group members) is added to reach.
+- If the same group appears in multiple tasks, every exposure is counted; groups are not deduplicated across tasks.
+- Both <code>超级群发</code> and <code>群发客户群</code> tasks contribute to community-group reach.
+
+#### Customer mass-message and Moments reach
+
+Task 3 generates <code>企微社群任务触达客户统计.docx</code>. Its two totals are written to the daily report as follows:
+
+| Word metric | Daily-report field |
+| --- | --- |
+| Total reach of customer mass messages | Welfare-account friends |
+| Total reach of Moments posts | Moments |
+
+#### Reach by store group
+
+Store-group reach includes only task files whose names contain a store-group marker:
+
+| Filename marker | Store group |
+| --- | --- |
+| <code>AFD</code> | <code>社群-A档</code> |
+| <code>BFD</code> | <code>社群-B档</code> |
+| <code>CFD</code> | <code>社群-C档</code> |
+| <code>SFD</code> | <code>社群-S档</code> |
+
+Included files:
+
+- <code>超级群发</code> files whose names contain <code>AFD/BFD/CFD/SFD</code>
+- <code>群发客户群</code> files whose names contain <code>AFD/BFD/CFD/SFD</code>
+
+Ordinary <code>D</code> files and files without an <code>AFD/BFD/CFD/SFD</code> marker are excluded. The food-coupon row equals the sum of reach across the A, B, C, and S tiers for that date.
+
+#### Re-runs and historical data
+
+- The local daily report is updated by date. Recalculating the same date replaces its old rows rather than appending duplicates.
+- By default, only the most recent few days are recalculated on a rolling basis; older historical dates remain unchanged.
+- Feishu sync only appends local dates newer than the latest online date. It never overwrites, clears, or modifies historical online rows.
+
+### 1.7 Feishu sync configuration
+
+Feishu sync is disabled by default. To enable it, click <code>飞书同步配置</code> in the GUI and enter:
+
+~~~text
+App ID
+App Secret
+Reach Summary sheet URL
+Reach by Store Group sheet URL
+~~~
+
+After <code>测试连接</code> (Test Connection) succeeds, select <code>启用飞书同步</code> (Enable Feishu Sync) and save.
+
+<code>启用飞书同步</code> is the master switch for Task 7:
+
+- Disabled: automatic runs execute only the first six tasks, without connecting to Feishu or writing to online spreadsheets.
+- Enabled: Task 7 syncs the online spreadsheets after the first six tasks finish.
+
+Sync is append-only:
+
+- It first reads the dates already present in the Feishu spreadsheets.
+- It appends only local-report dates newer than the latest online date.
+- It never overwrites, clears, or changes historical online rows.
+- After appending, it automatically applies centered alignment, date formats, and thousands separators.
+
+The Feishu app must have permission to read and write spreadsheets. The <code>App Secret</code> is stored in <code>%LOCALAPPDATA%\ScrmDailyExporter\.env</code> on the current computer. Do not commit it to Git or distribute it with the source package.
+
+### 1.8 Troubleshooting
+
+**The scheduled task did not run**
+
+Make sure the computer was powered on and the current Windows user was signed in at 09:40. You can click <code>重新安装计划任务</code> in the GUI to refresh the scheduled task.
+
+**The login window does not open or keeps waiting for QR-code login**
+
+The application uses Chrome debug port <code>9333</code> by default. If another application is using that port, change it in <code>%LOCALAPPDATA%\ScrmDailyExporter\.env</code>:
+
+~~~text
+CHROME_DEBUG_PORT=9334
+~~~
+
+Then click <code>扫码登录/刷新登录态</code> again.
+
+**Writing the Excel file fails**
+
+If the log contains <code>PermissionError</code> or says that the file is in use, <code>社群任务触达人数日报.xlsx</code> is usually open in Excel. Close the workbook and run the application again.
+
+**Dates appear as numbers in the Feishu spreadsheet**
+
+The current version applies formatting automatically after appending. If older data is already displayed as numbers, use the maintenance script's format-repair option to reapply the date format; see Section 2.8.
+
+**Online-spreadsheet sync fails**
+
+First click <code>测试连接</code> under <code>飞书同步配置</code>. If the test fails, verify the App ID, App Secret, spreadsheet URLs, app permissions, and whether the spreadsheets have been shared with the app.
+
+## 2. Source Maintenance and Extension
+
+### 2.1 Source structure
+
+| File | Purpose |
+| --- | --- |
+| <code>app_ui.py</code> | Main GUI, task checklist, buttons, and Feishu sync settings |
+| <code>app_cli.py</code> | CLI entry point for <code>run</code>, <code>login</code>, <code>status</code>, <code>install-task</code>, and <code>uninstall-task</code> |
+| <code>daily_export_scheduler.py</code> | Daily scheduling and task orchestration, including task state, catch-up dates, and login refresh |
+| <code>export_super_group_undelivered.py</code> | Undelivered Super Mass Messaging export and base SCRM API-client logic |
+| <code>export_chat_group_analysis_by_chat.py</code> | Customer Group Analytics by group chat export |
+| <code>export_reach_customer_summary.py</code> | Calculates customer mass-message and Moments reach and generates the Word report |
+| <code>export_group_send_customer_group.py</code> | Customer-group mass-message export |
+| <code>export_reach_daily_excel.py</code> | Generates the local <code>社群任务触达人数日报.xlsx</code> workbook |
+| <code>sync_feishu_reach_workbook.py</code> | Appends local daily-report data to Feishu spreadsheets |
+| <code>scrm_browser_fetch.py</code> | Fallback that sends same-origin requests through Chrome DevTools in an authenticated page |
+| <code>runtime_paths.py</code> | Rules for application, configuration, log, and other runtime paths |
+| <code>app_settings.py</code> | Export directory and global catch-up start date saved by the GUI |
+| <code>state_file_io.py</code> | State-file input/output |
+| <code>requirements.txt</code> | Python dependencies |
+| <code>ScrmDailyExporter.spec</code> | Production PyInstaller configuration |
+| <code>build_release.ps1</code> | Builds <code>dist\ScrmDailyExporter</code> |
+| <code>build_installer.ps1</code> | Builds the installer from <code>dist</code> |
+| <code>install_local.ps1</code> | Performs a quick local installation without creating an installer |
+| <code>installer.iss</code> | Inno Setup installer configuration |
+
+### 2.2 Local development environment
+
+After receiving a standard source package, maintainers should run the following commands in the source directory:
+
+~~~powershell
+python -m venv .venv
+.\.venv\Scripts\pip.exe install -r requirements.txt
+~~~
+
+Launch the GUI directly from source during development:
+
+~~~powershell
+.\.venv\Scripts\python.exe app_ui.py
+~~~
+
+To inspect the schedule without performing an actual export:
+
+~~~powershell
+.\.venv\Scripts\python.exe app_cli.py run --test-mode --plan-only
+~~~
+
+Common commands:
+
+~~~powershell
+.\.venv\Scripts\python.exe app_cli.py status
+.\.venv\Scripts\python.exe app_cli.py login
+.\.venv\Scripts\python.exe app_cli.py run --start-date 2026-08-01
+.\.venv\Scripts\python.exe app_cli.py install-task --test-mode
+.\.venv\Scripts\python.exe app_cli.py uninstall-task --test-mode
+~~~
+
+<code>--test-mode</code> uses separate test configuration, output directories, and scheduled-task names so that the production installation is not affected.
+
+### 2.3 Building and releasing
+
+Build the directly runnable executable directory:
+
+~~~powershell
+.\build_release.ps1
+~~~
+
+Output directory:
+
+~~~text
+dist\ScrmDailyExporter
+~~~
+
+Build the production installer:
+
+~~~powershell
+.\build_installer.ps1
+~~~
+
+Output file:
+
+~~~text
+installer-output\ScrmDailyExporterSetup.exe
+~~~
+
+Send <code>ScrmDailyExporterSetup.exe</code> to end users. A clean source package can be provided separately to maintainers.
+
+<code>dist</code>, <code>build</code>, <code>installer-output</code>, <code>.venv</code>, and <code>.env</code> are excluded from Git. It is normal for a source package not to contain <code>dist</code>; run <code>build_release.ps1</code> when it needs to be regenerated.
+
+### 2.4 Configuration and runtime data
+
+All runtime configuration is stored under <code>%LOCALAPPDATA%\ScrmDailyExporter</code> for the current Windows user.
+
+| File or directory | Contents |
+| --- | --- |
+| <code>.env</code> | WeCom token/cookie, Feishu App ID/Secret, Chrome port, and other sensitive configuration |
+| <code>logs</code> | Detailed logs for each run |
+| <code>state\export_state.json</code> | Most recent successful date for each task |
+| <code>state\latest_status.txt</code> | Current GUI status summary |
+| <code>app_settings.json</code> | Export directory and global catch-up start date saved by the GUI |
+| <code>chrome-profile</code> | Dedicated Chrome login profile |
+
+Do not commit or distribute <code>.env</code>. Each colleague who needs to use the application independently should scan to log in on their own computer and enter their own Feishu sync settings in the GUI.
+
+### 2.5 When the WeCom admin APIs change
+
+First, use the logs to identify the failed task:
+
+~~~powershell
+Get-Content -LiteralPath "$env:LOCALAPPDATA\ScrmDailyExporter\state\latest_status.txt" -Raw
+~~~
+
+Then open the latest log:
+
+~~~powershell
+Get-ChildItem "$env:LOCALAPPDATA\ScrmDailyExporter\logs" -Filter *.log |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+~~~
+
+Use the failed task to locate the relevant source file:
+
+| Failed task | Check first |
+| --- | --- |
+| Undelivered Super Mass Messaging records | <code>export_super_group_undelivered.py</code> |
+| Customer Group Analytics by group chat | <code>export_chat_group_analysis_by_chat.py</code> |
+| Customer mass-message and Moments reach | <code>export_reach_customer_summary.py</code> |
+| Customer-group mass-message export | <code>export_group_send_customer_group.py</code> |
+| Reach Summary or Reach by Store Group | <code>export_reach_daily_excel.py</code> |
+| Online-spreadsheet sync | <code>sync_feishu_reach_workbook.py</code> |
+
+General procedure for investigating an API change:
+
+1. Use <code>扫码登录/刷新登录态</code> in the GUI to open the dedicated Chrome window.
+2. Manually perform the corresponding admin action in Chrome DevTools' Network panel.
+3. Compare the new request URL, payload, headers, and response fields.
+4. Update the endpoint, request parameters, or field parsing in the corresponding <code>export_*.py</code> file.
+5. Check the task plan with <code>--test-mode --plan-only</code>.
+6. Validate a real export for a small date range.
+7. After validation, run <code>build_release.ps1</code> and <code>build_installer.ps1</code> again.
+
+An export failure does not necessarily mean that an API changed. Try scanning to log in again first. Log messages containing <code>WinError 10061</code>, <code>127.0.0.1:9333</code>, or <code>Chrome debug port</code> usually indicate that the Chrome debugging window is not running or that its port conflicts with another application.
+
+### 2.6 When the Feishu API or spreadsheet format changes
+
+Check <code>sync_feishu_reach_workbook.py</code> first.
+
+Key logic includes:
+
+- Parsing Feishu spreadsheet URLs
+- Obtaining a <code>tenant_access_token</code>
+- Converting a wiki token to a spreadsheet token
+- Reading dates already present in the online spreadsheets
+- Determining whether only new dates should be appended
+- Writing <code>触达人数汇总</code>
+- Writing <code>门店分组触达人数</code>
+- Applying date formats, thousands separators, and centered alignment after appending
+
+If a spreadsheet sheet is replaced, end users can update its URL directly under <code>飞书同步配置</code> in the GUI without modifying source code.
+
+If the online column structure changes, update all of the following:
+
+- <code>SUMMARY_COLUMNS</code>
+- <code>STORE_GROUP_COLUMNS</code>
+- <code>read_local_summary_rows</code>
+- <code>read_local_store_group_rows</code>
+- <code>format_summary_rows</code>
+- <code>format_store_group_rows</code>
+
+### 2.7 Adding a task
+
+Adding a task generally requires changes in all of the following places:
+
+1. Add or extend the relevant export or aggregation script.
+2. Add the task ID, label, execution function, and dependency order in <code>daily_export_scheduler.py</code>.
+3. Add the task to the <code>TASKS</code> checklist in <code>app_ui.py</code>.
+4. Add state migration or initialization logic if the task requires it.
+5. Update the README task list, output documentation, and maintenance instructions.
+6. Check the task plan with <code>--test-mode --plan-only</code>.
+7. Validate the task on a small date range.
+
+Avoid renaming a task ID after release because <code>state\export_state.json</code> records completion dates by task ID.
+
+### 2.8 Debugging and maintenance commands
+
+Syntax check:
+
+~~~powershell
+.\.venv\Scripts\python.exe -m compileall -q .
+~~~
+
+Check the installed application's status:
+
+~~~powershell
+& "$env:LOCALAPPDATA\ScrmDailyExporter\app\scrm-exporter.exe" status
+~~~
+
+Inspect the installed application's task plan:
+
+~~~powershell
+& "$env:LOCALAPPDATA\ScrmDailyExporter\app\scrm-exporter.exe" run --plan-only
+~~~
+
+Catch up from a specified date:
+
+~~~powershell
+& "$env:LOCALAPPDATA\ScrmDailyExporter\app\scrm-exporter.exe" run --start-date 2026-08-01
+~~~
+
+Repair Feishu formatting for one date only:
+
+~~~powershell
+.\.venv\Scripts\python.exe .\sync_feishu_reach_workbook.py \
+  --workbook "$env:USERPROFILE\Documents\每日企微私域任务导出\社群任务触达人数日报.xlsx" \
+  --env "$env:LOCALAPPDATA\ScrmDailyExporter\.env" \
+  --date 2026-08-16 \
+  --format-only
+~~~
+
+Dry-run Feishu sync:
+
+~~~powershell
+.\.venv\Scripts\python.exe .\sync_feishu_reach_workbook.py \
+  --workbook "$env:USERPROFILE\Documents\每日企微私域任务导出\社群任务触达人数日报.xlsx" \
+  --env "$env:LOCALAPPDATA\ScrmDailyExporter\.env" \
+  --date 2026-08-16 \
+  --dry-run
+~~~
+
+---
+
+<a id="chinese"></a>
+
+[English](#english) | [中文](#chinese)
+
 # 企微社群任务自动导出工具
 
 这是一个可安装的 Windows GUI 工具，用于每天自动导出企微社群相关任务、生成本地统计文件，并可选把触达人数日报追加同步到飞书在线表。
